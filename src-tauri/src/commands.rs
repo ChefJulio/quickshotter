@@ -264,11 +264,8 @@ fn notify_capture(_app: &AppHandle, filepath: Option<&str>) {
 
     #[cfg(not(target_os = "windows"))]
     {
-      let result = notify_rust::Notification::new()
-        .summary(&title)
-        .body(&body)
-        .show();
-      let _ = result;
+      // TODO: add notify-rust dependency for macOS/Linux notifications
+      eprintln!("{}: {}", title, body);
     }
   });
 }
