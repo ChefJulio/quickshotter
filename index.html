@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QuickShotter Settings</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="settings">
+      <p class="description">Screenshot tool that captures and copies to clipboard instantly.</p>
+
+      <div class="field">
+        <label for="save-folder">Save folder</label>
+        <div class="field-row">
+          <input type="text" id="save-folder" />
+          <button id="browse-btn" type="button">Browse...</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="hotkey-region">Region hotkey</label>
+        <input type="text" id="hotkey-region" />
+      </div>
+
+      <div class="field">
+        <label for="hotkey-fullscreen">Fullscreen hotkey</label>
+        <input type="text" id="hotkey-fullscreen" />
+        <span class="hint">e.g. CmdOrCtrl+Alt+Shift+S</span>
+      </div>
+
+      <div class="field">
+        <label for="format">Save format</label>
+        <select id="format">
+          <option value="jpg">JPG</option>
+          <option value="png">PNG</option>
+          <option value="webp">WebP</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="filename-prefix">Filename prefix</label>
+        <input type="text" id="filename-prefix" />
+      </div>
+
+      <div class="field checkbox-field">
+        <input type="checkbox" id="save-to-disk" />
+        <label for="save-to-disk">Also save screenshots to disk</label>
+      </div>
+
+      <div class="buttons">
+        <button id="save-btn" type="button">Save</button>
+        <button id="cancel-btn" type="button">Cancel</button>
+      </div>
+    </main>
+  </body>
+</html>

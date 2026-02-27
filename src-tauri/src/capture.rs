@@ -1,0 +1,119 @@
+use arboard::Clipboard;
+use base64::Engine;
+use image::{ImageBuffer, RgbaImage};
+use std::io::Cursor;
+use std::path::PathBuf;
+use xcap::Monitor;
+
+use crate::config::AppConfig;
+use crate::error::AppError;
+
+/// Capture all monitors and stitch into a single image covering the virtual desktop.
+pub fn capture_all_monitors() -> Result<RgbaImage, AppError> {
+  let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
+  if monitors.is_empty() {
+    return Err(AppError::Capture("No monitors found".to_string()));
+  }
+
+  // Calculate virtual desktop bounds
+  let mut min_x = i32::MAX;
+  let mut min_y = i32::MAX;
+  let mut max_x = i32::MIN;
+  let mut max_y = i32::MIN;
+
+  for m in &monitors {
+    let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    let w = m.width().map_err(|e| AppError::Capture(e.to_string()))? as i32;
+    let h = m.height().map_err(|e| AppError::Capture(e.to_string()))? as i32;
+    min_x = min_x.min(x);
+    min_y = min_y.min(y);
+    max_x = max_x.max(x + w);
+    max_y = max_y.max(y + h);
+  }
+
+  let total_w = (max_x - min_x) as u32;
+  let total_h = (max_y - min_y) as u32;
+  let mut canvas: RgbaImage = ImageBuffer::new(total_w, total_h);
+
+  for m in &monitors {
+    let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
+    let mx = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let my = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    let offset_x = (mx - min_x) as u32;
+    let offset_y = (my - min_y) as u32;
+
+    for (px, py, pixel) in img.enumerate_pixels() {
+      let dx = offset_x + px;
+      let dy = offset_y + py;
+      if dx < total_w && dy < total_h {
+        canvas.put_pixel(dx, dy, *pixel);
+      }
+    }
+  }
+
+  Ok(canvas)
+}
+
+/// Encode an image as PNG base64 for sending to the overlay webview.
+pub fn image_to_base64(img: &RgbaImage) -> Result<String, AppError> {
+  let mut buf = Cursor::new(Vec::new());
+  img.write_to(&mut buf, image::ImageFormat::Png)
+    .map_err(|e| AppError::Capture(e.to_string()))?;
+  Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
+/// Copy an RGBA image to the system clipboard.
+pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), AppError> {
+  let mut clipboard = Clipboard::new().map_err(|e| AppError::Clipboard(e.to_string()))?;
+  let img_data = arboard::ImageData {
+    width: img.width() as usize,
+    height: img.height() as usize,
+    bytes: std::borrow::Cow::Borrowed(img.as_raw()),
+  };
+  clipboard
+    .set_image(img_data)
+    .map_err(|e| AppError::Clipboard(e.to_string()))?;
+  Ok(())
+}
+
+/// Save an image to disk based on config. Returns the filepath if saved.
+pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
+  if !config.save_to_disk {
+    return Ok(None);
+  }
+
+  let folder = PathBuf::from(&config.save_folder);
+  std::fs::create_dir_all(&folder)?;
+
+  let timestamp = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
+  let ext = &config.format;
+  let filename = format!("{}_{}.{}", config.filename_prefix, timestamp, ext);
+  let filepath = folder.join(&filename);
+
+  match ext.as_str() {
+    "jpg" | "jpeg" => {
+      let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+      let mut buf = Cursor::new(Vec::new());
+      let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85);
+      encoder
+        .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
+      std::fs::write(&filepath, buf.into_inner())?;
+    }
+    "webp" => {
+      let rgba = image::DynamicImage::ImageRgba8(img.clone());
+      let mut buf = Cursor::new(Vec::new());
+      rgba
+        .write_to(&mut buf, image::ImageFormat::WebP)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
+      std::fs::write(&filepath, buf.into_inner())?;
+    }
+    _ => {
+      // PNG (default)
+      img.save(&filepath).map_err(|e| AppError::Capture(e.to_string()))?;
+    }
+  }
+
+  Ok(Some(filepath))
+}
