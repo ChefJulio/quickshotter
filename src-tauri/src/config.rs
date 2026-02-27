@@ -13,6 +13,12 @@ pub struct AppConfig {
   pub format: String,
   pub filename_prefix: String,
   pub save_to_disk: bool,
+  #[serde(default = "default_capture_mode")]
+  pub capture_mode: String,
+}
+
+fn default_capture_mode() -> String {
+  "instant".to_string()
 }
 
 impl Default for AppConfig {
@@ -24,6 +30,7 @@ impl Default for AppConfig {
       format: "jpg".to_string(),
       filename_prefix: "quickshotter".to_string(),
       save_to_disk: true,
+      capture_mode: "instant".to_string(),
     }
   }
 }

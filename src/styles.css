@@ -103,14 +103,26 @@ select {
 
 button {
   padding: 8px 24px;
-  border: 1px solid #ccc;
+  border: 1px solid #bbb;
   border-radius: 4px;
-  background: #fff;
+  background: #e8e8e8;
   cursor: pointer;
   font-size: 13px;
   font-family: inherit;
+  color: #1a1a1a;
 }
 
 button:hover {
-  border-color: #2196f3;
+  background: #d0d0d0;
+  border-color: #999;
+}
+
+#save-btn {
+  background: #2196f3;
+  border-color: #1976d2;
+  color: #fff;
+}
+
+#save-btn:hover {
+  background: #1976d2;
 }

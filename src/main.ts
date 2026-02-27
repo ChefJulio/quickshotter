@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { AppConfig } from './types';
 
 let folderInput: HTMLInputElement;
@@ -7,6 +8,7 @@ let fullscreenHotkeyInput: HTMLInputElement;
 let formatSelect: HTMLSelectElement;
 let prefixInput: HTMLInputElement;
 let saveToDiskCheckbox: HTMLInputElement;
+let captureModeSelect: HTMLSelectElement;
 
 async function loadConfig() {
   const config: AppConfig = await invoke('get_config');
@@ -16,6 +18,7 @@ async function loadConfig() {
   formatSelect.value = config.format;
   prefixInput.value = config.filename_prefix;
   saveToDiskCheckbox.checked = config.save_to_disk;
+  captureModeSelect.value = config.capture_mode;
 }
 
 async function saveConfig() {
@@ -26,11 +29,12 @@ async function saveConfig() {
     format: formatSelect.value as AppConfig['format'],
     filename_prefix: prefixInput.value,
     save_to_disk: saveToDiskCheckbox.checked,
+    capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
   };
 
   try {
     await invoke('save_config', { newConfig: config });
-    window.close();
+    getCurrentWindow().close();
   } catch (e) {
     alert(`Failed to save settings: ${e}`);
   }
@@ -50,10 +54,11 @@ window.addEventListener('DOMContentLoaded', () => {
   formatSelect = document.getElementById('format') as HTMLSelectElement;
   prefixInput = document.getElementById('filename-prefix') as HTMLInputElement;
   saveToDiskCheckbox = document.getElementById('save-to-disk') as HTMLInputElement;
+  captureModeSelect = document.getElementById('capture-mode') as HTMLSelectElement;
 
   document.getElementById('browse-btn')!.addEventListener('click', browseSaveFolder);
   document.getElementById('save-btn')!.addEventListener('click', saveConfig);
-  document.getElementById('cancel-btn')!.addEventListener('click', () => window.close());
+  document.getElementById('cancel-btn')!.addEventListener('click', () => getCurrentWindow().close());
 
   loadConfig();
 });

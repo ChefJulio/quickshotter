@@ -5,6 +5,7 @@ export interface AppConfig {
   format: 'jpg' | 'png' | 'webp';
   filename_prefix: string;
   save_to_disk: boolean;
+  capture_mode: 'instant' | 'freeze';
 }
 
 export interface CaptureResult {

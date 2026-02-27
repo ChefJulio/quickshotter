@@ -21,6 +21,8 @@ pub fn run() {
       commands::trigger_fullscreen_capture,
       commands::complete_region_capture,
       commands::cancel_capture,
+      commands::get_overlay_mode,
+      commands::get_pending_screenshot,
       commands::get_config,
       commands::save_config,
       commands::pick_folder,
@@ -36,6 +38,15 @@ pub fn run() {
 
       Ok(())
     })
-    .run(tauri::generate_context!())
-    .expect("error while running QuickShotter");
+    .build(tauri::generate_context!())
+    .expect("error building QuickShotter")
+    .run(|_app, event| {
+      // Prevent app from exiting when all windows close (tray app)
+      // Only block automatic exit (code None), not intentional app.exit() calls (code Some)
+      if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+        if code.is_none() {
+          api.prevent_exit();
+        }
+      }
+    });
 }

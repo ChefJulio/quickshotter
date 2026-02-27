@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 let canvas: HTMLCanvasElement;
 let ctx: CanvasRenderingContext2D;
+
+// Freeze mode only
 let screenshotImage: HTMLImageElement | null = null;
 let dimmedCanvas: HTMLCanvasElement;
 let dimmedCtx: CanvasRenderingContext2D;
@@ -12,6 +14,8 @@ let startX = 0;
 let startY = 0;
 let currentX = 0;
 let currentY = 0;
+let mode: string = 'instant';
+let cancelled = false;
 
 function initCanvas() {
   canvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
@@ -19,7 +23,7 @@ function initCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 
-  // Pre-create dimmed canvas
+  // Pre-create dimmed canvas (used in freeze mode)
   dimmedCanvas = document.createElement('canvas');
   dimmedCtx = dimmedCanvas.getContext('2d')!;
 
@@ -34,12 +38,17 @@ function initCanvas() {
   document.addEventListener('keydown', onKeyDown);
 }
 
-async function onScreenshotReady(base64Data: string) {
+function showInstantOverlay() {
+  // Just fill with semi-transparent dark -- no screenshot needed
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function loadScreenshot(base64Data: string) {
   const img = new Image();
   img.onload = () => {
     screenshotImage = img;
 
-    // Resize canvas to match the screenshot
     canvas.width = img.width;
     canvas.height = img.height;
     dimmedCanvas.width = img.width;
@@ -50,10 +59,9 @@ async function onScreenshotReady(base64Data: string) {
     dimmedCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
     dimmedCtx.fillRect(0, 0, img.width, img.height);
 
-    // Show dimmed screenshot
     ctx.drawImage(dimmedCanvas, 0, 0);
   };
-  img.src = `data:image/png;base64,${base64Data}`;
+  img.src = `data:image/jpeg;base64,${base64Data}`;
 }
 
 function onMouseDown(e: MouseEvent) {
@@ -66,14 +74,14 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onMouseMove(e: MouseEvent) {
-  if (!isDragging || !screenshotImage) return;
+  if (!isDragging) return;
   currentX = e.clientX;
   currentY = e.clientY;
   drawSelection();
 }
 
 function onMouseUp(e: MouseEvent) {
-  if (!isDragging || !screenshotImage) return;
+  if (!isDragging) return;
   isDragging = false;
 
   const x1 = Math.min(startX, e.clientX);
@@ -90,8 +98,6 @@ function onMouseUp(e: MouseEvent) {
 }
 
 function drawSelection() {
-  if (!screenshotImage) return;
-
   const x1 = Math.min(startX, currentX);
   const y1 = Math.min(startY, currentY);
   const x2 = Math.max(startX, currentX);
@@ -101,11 +107,17 @@ function drawSelection() {
 
   if (w < 2 || h < 2) return;
 
-  // Redraw dimmed background
-  ctx.drawImage(dimmedCanvas, 0, 0);
-
-  // Draw bright (original) region inside selection
-  ctx.drawImage(screenshotImage, x1, y1, w, h, x1, y1, w, h);
+  if (mode === 'freeze' && screenshotImage) {
+    // Freeze mode: redraw dimmed bg, show bright region in selection
+    ctx.drawImage(dimmedCanvas, 0, 0);
+    ctx.drawImage(screenshotImage, x1, y1, w, h, x1, y1, w, h);
+  } else {
+    // Instant mode: redraw dark overlay, clear selection area to show through
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.clearRect(x1, y1, w, h);
+  }
 
   // Selection border
   ctx.strokeStyle = '#00aaff';
@@ -133,23 +145,37 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function cancel() {
+  if (cancelled) return;
+  cancelled = true;
   invoke('cancel_capture');
 }
 
 function captureFullscreen() {
-  if (!screenshotImage) return;
   invoke('complete_region_capture', {
     x1: 0,
     y1: 0,
-    x2: screenshotImage.width,
-    y2: screenshotImage.height,
+    x2: canvas.width,
+    y2: canvas.height,
   });
 }
 
-// Initialize
-window.addEventListener('DOMContentLoaded', () => {
+// Bootstrap: set up overlay, then show window (avoids white flash)
+window.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
-  listen<string>('screenshot-ready', (event) => {
-    onScreenshotReady(event.payload);
-  });
+  try {
+    mode = await invoke<string>('get_overlay_mode');
+    if (mode === 'freeze') {
+      const base64Data: string = await invoke('get_pending_screenshot');
+      loadScreenshot(base64Data);
+    } else {
+      showInstantOverlay();
+    }
+    // Show window only after canvas is ready (no white flash)
+    const win = getCurrentWindow();
+    await win.show();
+    await win.setFocus();
+  } catch (e) {
+    console.error('Overlay init failed:', e);
+    cancel();
+  }
 });

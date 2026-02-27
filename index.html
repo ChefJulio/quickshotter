@@ -49,6 +49,15 @@
         <label for="save-to-disk">Also save screenshots to disk</label>
       </div>
 
+      <div class="field">
+        <label for="capture-mode">Capture mode</label>
+        <select id="capture-mode">
+          <option value="instant">Instant (faster overlay)</option>
+          <option value="freeze">Freeze (captures screen first)</option>
+        </select>
+        <span class="hint">Instant shows overlay immediately; Freeze captures the screen first so it stays still</span>
+      </div>
+
       <div class="buttons">
         <button id="save-btn" type="button">Save</button>
         <button id="cancel-btn" type="button">Cancel</button>

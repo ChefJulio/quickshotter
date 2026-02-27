@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 use base64::Engine;
-use image::{ImageBuffer, RgbaImage};
+use image::{GenericImage, ImageBuffer, RgbaImage};
 use std::io::Cursor;
 use std::path::PathBuf;
 use xcap::Monitor;
@@ -8,14 +8,83 @@ use xcap::Monitor;
 use crate::config::AppConfig;
 use crate::error::AppError;
 
+/// Virtual desktop bounds returned alongside the stitched screenshot.
+pub struct ScreenCapture {
+  pub image: RgbaImage,
+  pub origin_x: i32,
+  pub origin_y: i32,
+  pub width: u32,
+  pub height: u32,
+}
+
+/// Virtual desktop bounds (no image capture -- fast).
+pub struct DesktopBounds {
+  pub x: i32,
+  pub y: i32,
+  pub width: u32,
+  pub height: u32,
+}
+
+/// Get virtual desktop bounds without capturing any images.
+pub fn get_desktop_bounds() -> Result<DesktopBounds, AppError> {
+  let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
+  if monitors.is_empty() {
+    return Err(AppError::Capture("No monitors found".to_string()));
+  }
+  if monitors.len() == 1 {
+    let m = &monitors[0];
+    return Ok(DesktopBounds {
+      x: m.x().map_err(|e| AppError::Capture(e.to_string()))?,
+      y: m.y().map_err(|e| AppError::Capture(e.to_string()))?,
+      width: m.width().map_err(|e| AppError::Capture(e.to_string()))?,
+      height: m.height().map_err(|e| AppError::Capture(e.to_string()))?,
+    });
+  }
+  let mut min_x = i32::MAX;
+  let mut min_y = i32::MAX;
+  let mut max_x = i32::MIN;
+  let mut max_y = i32::MIN;
+  for m in &monitors {
+    let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    let w = m.width().map_err(|e| AppError::Capture(e.to_string()))? as i32;
+    let h = m.height().map_err(|e| AppError::Capture(e.to_string()))? as i32;
+    min_x = min_x.min(x);
+    min_y = min_y.min(y);
+    max_x = max_x.max(x + w);
+    max_y = max_y.max(y + h);
+  }
+  Ok(DesktopBounds {
+    x: min_x,
+    y: min_y,
+    width: (max_x - min_x) as u32,
+    height: (max_y - min_y) as u32,
+  })
+}
+
 /// Capture all monitors and stitch into a single image covering the virtual desktop.
-pub fn capture_all_monitors() -> Result<RgbaImage, AppError> {
+pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
   let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
   if monitors.is_empty() {
     return Err(AppError::Capture("No monitors found".to_string()));
   }
 
-  // Calculate virtual desktop bounds
+  // Single monitor fast path -- skip stitching entirely
+  if monitors.len() == 1 {
+    let m = &monitors[0];
+    let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
+    let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    return Ok(ScreenCapture {
+      width: img.width(),
+      height: img.height(),
+      origin_x: x,
+      origin_y: y,
+      image: img,
+    });
+  }
+
+  // Multi-monitor: calculate virtual desktop bounds
   let mut min_x = i32::MAX;
   let mut min_y = i32::MAX;
   let mut max_x = i32::MIN;
@@ -42,23 +111,27 @@ pub fn capture_all_monitors() -> Result<RgbaImage, AppError> {
     let my = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
     let offset_x = (mx - min_x) as u32;
     let offset_y = (my - min_y) as u32;
-
-    for (px, py, pixel) in img.enumerate_pixels() {
-      let dx = offset_x + px;
-      let dy = offset_y + py;
-      if dx < total_w && dy < total_h {
-        canvas.put_pixel(dx, dy, *pixel);
-      }
-    }
+    canvas.copy_from(&img, offset_x, offset_y)
+      .map_err(|e| AppError::Capture(e.to_string()))?;
   }
 
-  Ok(canvas)
+  Ok(ScreenCapture {
+    image: canvas,
+    origin_x: min_x,
+    origin_y: min_y,
+    width: total_w,
+    height: total_h,
+  })
 }
 
-/// Encode an image as PNG base64 for sending to the overlay webview.
+/// Encode an image as JPEG base64 for sending to the overlay webview.
+/// Uses JPEG instead of PNG -- ~10x faster encoding, only used for preview.
 pub fn image_to_base64(img: &RgbaImage) -> Result<String, AppError> {
+  let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
   let mut buf = Cursor::new(Vec::new());
-  img.write_to(&mut buf, image::ImageFormat::Png)
+  let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
+  encoder
+    .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
     .map_err(|e| AppError::Capture(e.to_string()))?;
   Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }

@@ -16,11 +16,30 @@ pub struct CaptureResultDto {
   pub copied_to_clipboard: bool,
 }
 
+/// Returns "instant" or "freeze" so the overlay JS knows which mode to use.
+#[tauri::command]
+pub fn get_overlay_mode(app: AppHandle) -> String {
+  let state = app.state::<Mutex<AppState>>();
+  let state = state.lock().unwrap();
+  state.config.capture_mode.clone()
+}
+
+/// In freeze mode, the overlay pulls the pre-captured screenshot.
+#[tauri::command]
+pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
+  let state = app.state::<Mutex<AppState>>();
+  let state = state.lock().unwrap();
+  state
+    .pending_base64
+    .clone()
+    .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
+}
+
 // -- Capture commands --
 
 #[tauri::command]
-pub async fn trigger_region_capture(app: AppHandle) -> Result<(), AppError> {
-  overlay::open_overlay(&app).await
+pub fn trigger_region_capture(app: AppHandle) -> Result<(), AppError> {
+  overlay::open_overlay(&app)
 }
 
 #[tauri::command]
@@ -29,8 +48,8 @@ pub async fn trigger_fullscreen_capture(app: AppHandle) -> Result<CaptureResultD
 }
 
 pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
-  let screenshot = capture::capture_all_monitors()?;
-  capture::copy_to_clipboard(&screenshot)?;
+  let screen = capture::capture_all_monitors()?;
+  capture::copy_to_clipboard(&screen.image)?;
 
   let config = {
     let state = app.state::<Mutex<AppState>>();
@@ -38,13 +57,14 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
     state.config.clone()
   };
 
-  let saved = capture::save_to_disk(&screenshot, &config)?;
+  let saved = capture::save_to_disk(&screen.image, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().unwrap();
     state.add_to_history(path.clone());
+    state.last_saved_path = Some(path.clone());
   }
 
   tray::refresh_tray_menu(app);
@@ -64,34 +84,49 @@ pub async fn complete_region_capture(
   x2: u32,
   y2: u32,
 ) -> Result<CaptureResultDto, AppError> {
-  // Get the pending screenshot and crop
-  let cropped = {
+  let left = x1.min(x2);
+  let top = y1.min(y2);
+  let right = x1.max(x2);
+  let bottom = y1.max(y2);
+  let w = right - left;
+  let h = bottom - top;
+
+  // Hide overlay immediately (don't destroy -- we're still inside its webview command)
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+
+  if w < 3 || h < 3 {
+    // Defer destroy so the invoke response can be sent first
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+    return Err(AppError::Capture("Selection too small".to_string()));
+  }
+
+  // Check which mode we're in
+  let mode = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.capture_mode.clone()
+  };
+
+  let image = if mode == "freeze" {
+    // Freeze mode: crop from the pre-captured screenshot
     let state = app.state::<Mutex<AppState>>();
     let state = state.lock().unwrap();
     let screenshot = state
       .pending_screenshot
       .as_ref()
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
-
-    let left = x1.min(x2);
-    let top = y1.min(y2);
-    let right = x1.max(x2);
-    let bottom = y1.max(y2);
-    let w = right - left;
-    let h = bottom - top;
-
-    if w < 3 || h < 3 {
-      return Err(AppError::Capture("Selection too small".to_string()));
-    }
-
     image::imageops::crop_imm(screenshot, left, top, w, h).to_image()
+  } else {
+    // Instant mode: overlay is hidden, brief delay then capture
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let screen = capture::capture_all_monitors()?;
+    image::imageops::crop_imm(&screen.image, left, top, w, h).to_image()
   };
 
-  // Close overlay first
-  overlay::close_overlay(&app);
-
-  // Copy to clipboard and save
-  capture::copy_to_clipboard(&cropped)?;
+  capture::copy_to_clipboard(&image)?;
 
   let config = {
     let state = app.state::<Mutex<AppState>>();
@@ -99,17 +134,22 @@ pub async fn complete_region_capture(
     state.config.clone()
   };
 
-  let saved = capture::save_to_disk(&cropped, &config)?;
+  let saved = capture::save_to_disk(&image, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().unwrap();
     state.add_to_history(path.clone());
+    state.last_saved_path = Some(path.clone());
   }
 
   tray::refresh_tray_menu(&app);
   notify_capture(&app, filepath_str.as_deref());
+
+  // Defer overlay destroy so the invoke response gets sent back first
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
 
   Ok(CaptureResultDto {
     filepath: filepath_str,
@@ -119,7 +159,12 @@ pub async fn complete_region_capture(
 
 #[tauri::command]
 pub async fn cancel_capture(app: AppHandle) -> Result<(), AppError> {
-  overlay::close_overlay(&app);
+  // Hide immediately, defer destroy so invoke response can be sent
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
   Ok(())
 }
 
@@ -137,11 +182,9 @@ pub async fn save_config(
   app: AppHandle,
   new_config: crate::config::AppConfig,
 ) -> Result<(), AppError> {
-  // Ensure save folder exists
   let folder = std::path::PathBuf::from(&new_config.save_folder);
   std::fs::create_dir_all(&folder)?;
 
-  // Update state and persist
   {
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().unwrap();
@@ -149,7 +192,6 @@ pub async fn save_config(
   }
   config::save_config(&app, &new_config)?;
 
-  // Reload hotkeys with new config
   hotkeys::reload_hotkeys(&app).map_err(|e| AppError::Config(e.to_string()))?;
 
   Ok(())
@@ -171,7 +213,7 @@ pub fn show_settings_window(app: &AppHandle) {
   } else {
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
       .title("QuickShotter Settings")
-      .inner_size(480.0, 400.0)
+      .inner_size(480.0, 520.0)
       .resizable(false)
       .center()
       .always_on_top(true)
@@ -180,17 +222,79 @@ pub fn show_settings_window(app: &AppHandle) {
   }
 }
 
-fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
-  if let Some(tray) = app.tray_by_id("main") {
-    let msg = match filepath {
+fn notify_capture(_app: &AppHandle, filepath: Option<&str>) {
+  let filepath_owned = filepath.map(|s| s.to_string());
+
+  std::thread::spawn(move || {
+    let (title, body) = match filepath_owned.as_deref() {
       Some(fp) => {
-        std::path::Path::new(fp)
+        let filename = std::path::Path::new(fp)
           .file_name()
           .map(|n| n.to_string_lossy().to_string())
-          .unwrap_or_else(|| "Captured".to_string())
+          .unwrap_or_else(|| "screenshot".to_string());
+        ("Screenshot saved".to_string(), filename)
       }
-      None => "Copied to clipboard".to_string(),
+      None => ("Screenshot captured".to_string(), "Copied to clipboard".to_string()),
     };
-    tray.set_tooltip(Some(&msg)).ok();
+
+    #[cfg(target_os = "windows")]
+    {
+      use tauri_winrt_notification::Toast;
+
+      let fp_clone = filepath_owned.clone();
+      let mut toast = Toast::new(Toast::POWERSHELL_APP_ID)
+        .title(&title)
+        .text1(&body);
+
+      if filepath_owned.is_some() {
+        toast = toast
+          .add_button("Show in folder", "open_folder")
+          .on_activated(move |action| {
+            if action.is_none() || action.as_deref() == Some("open_folder") {
+              if let Some(ref fp) = fp_clone {
+                reveal_in_explorer(std::path::Path::new(fp));
+              }
+            }
+            Ok(())
+          });
+      }
+
+      toast.show().ok();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+      let result = notify_rust::Notification::new()
+        .summary(&title)
+        .body(&body)
+        .show();
+      let _ = result;
+    }
+  });
+}
+
+fn reveal_in_explorer(path: &std::path::Path) {
+  #[cfg(target_os = "windows")]
+  {
+    std::process::Command::new("explorer")
+      .arg(format!("/select,{}", path.display()))
+      .spawn()
+      .ok();
+  }
+  #[cfg(target_os = "macos")]
+  {
+    std::process::Command::new("open")
+      .args(["-R", &path.to_string_lossy()])
+      .spawn()
+      .ok();
+  }
+  #[cfg(target_os = "linux")]
+  {
+    if let Some(parent) = path.parent() {
+      std::process::Command::new("xdg-open")
+        .arg(parent)
+        .spawn()
+        .ok();
+    }
   }
 }

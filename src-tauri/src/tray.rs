@@ -11,19 +11,16 @@ use crate::state::AppState;
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   let menu = build_tray_menu(app, &[])?;
 
-  TrayIconBuilder::new()
+  TrayIconBuilder::with_id("main")
     .icon(app.default_window_icon().unwrap().clone())
     .menu(&menu)
     .tooltip("QuickShotter")
     .on_menu_event(move |app, event| {
       match event.id().as_ref() {
         "capture_region" => {
-          let app = app.clone();
-          tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::overlay::open_overlay(&app).await {
-              eprintln!("Region capture failed: {e}");
-            }
-          });
+          if let Err(e) = crate::overlay::open_overlay(&app) {
+            eprintln!("Region capture failed: {e}");
+          }
         }
         "capture_fullscreen" => {
           let app = app.clone();

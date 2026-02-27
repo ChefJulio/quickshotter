@@ -24,12 +24,9 @@ pub fn register_hotkeys(app: &AppHandle) -> Result<(), Box<dyn std::error::Error
   app.global_shortcut().on_shortcut(region_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
-      let app = app.clone();
-      tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::overlay::open_overlay(&app).await {
-          eprintln!("Region capture failed: {e}");
-        }
-      });
+      if let Err(e) = crate::overlay::open_overlay(&app) {
+        eprintln!("Region capture failed: {e}");
+      }
     }
   })?;
 
