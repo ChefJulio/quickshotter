@@ -3,11 +3,41 @@
 /// Uses xcap::Window::all() (sorted by z-order, topmost first) to find the
 /// topmost visible, non-minimized window at a given screen coordinate.
 /// Uses mouse_position crate for cross-platform cursor position.
+///
+/// A persistent worker thread handles queries to avoid ~1ms thread-spawn
+/// overhead on every cursor poll during window capture mode.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, OnceLock};
 use xcap::Window;
 
 static WINDOW_QUERY_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct WindowQuery {
+  x: i32,
+  y: i32,
+  exclude_id: WindowId,
+  reply: mpsc::Sender<Option<WindowRect>>,
+}
+
+static WORKER: OnceLock<mpsc::Sender<WindowQuery>> = OnceLock::new();
+
+fn get_or_init_worker() -> &'static mpsc::Sender<WindowQuery> {
+  WORKER.get_or_init(|| {
+    let (tx, rx) = mpsc::channel::<WindowQuery>();
+    std::thread::Builder::new()
+      .name("window-detect".into())
+      .spawn(move || {
+        for query in rx {
+          let result = find_window_at(query.x, query.y, query.exclude_id);
+          WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
+          query.reply.send(result).ok();
+        }
+      })
+      .expect("failed to spawn window detection thread");
+    tx
+  })
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WindowRect {
@@ -29,22 +59,22 @@ pub fn get_cursor_pos() -> (i32, i32) {
 }
 
 pub fn get_window_rect_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {
-  // Skip if a previous query is still running (timed out)
+  // Skip if a previous query is still being processed
   if WINDOW_QUERY_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
     return None;
   }
 
-  let (tx, rx) = std::sync::mpsc::channel();
-  std::thread::spawn(move || {
-    let result = find_window_at(x, y, exclude_id);
-    tx.send(result).ok();
+  let worker = get_or_init_worker();
+  let (reply_tx, reply_rx) = mpsc::channel();
+  if worker.send(WindowQuery { x, y, exclude_id, reply: reply_tx }).is_err() {
     WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
-  });
+    return None;
+  }
 
-  match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+  match reply_rx.recv_timeout(std::time::Duration::from_millis(500)) {
     Ok(result) => result,
     Err(_) => {
-      // Thread will reset WINDOW_QUERY_ACTIVE when it completes
+      // Worker thread will reset WINDOW_QUERY_ACTIVE when it finishes
       eprintln!("window_capture: Window::all() timed out");
       None
     }

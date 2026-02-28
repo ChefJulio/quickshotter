@@ -131,7 +131,7 @@ function onMouseUp(e: MouseEvent) {
   const y1 = Math.round(cssY1 * dpr);
   const x2 = Math.round(cssX2 * dpr);
   const y2 = Math.round(cssY2 * dpr);
-  invoke('complete_region_capture', { x1, y1, x2, y2 });
+  invoke('complete_region_capture', { x1, y1, x2, y2 }).catch(() => cancel());
 }
 
 function drawSelection() {
@@ -231,7 +231,7 @@ function drawWindowHighlight() {
 function onMouseDownWindow() {
   if (!highlightPhysical) return;
   // Send physical pixel coords directly to Rust
-  invoke('complete_window_capture', highlightPhysical);
+  invoke('complete_window_capture', highlightPhysical).catch(() => cancel());
 }
 
 // -- Keyboard --

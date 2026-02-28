@@ -2,27 +2,31 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
+use crate::config::AppConfig;
 use crate::state::{AppState, LockRecover};
 
 pub fn register_hotkeys(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-  let (region_str, fullscreen_str, window_str) = {
+  let config = {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
-    (
-      state.config.hotkey_region.clone(),
-      state.config.hotkey_fullscreen.clone(),
-      state.config.hotkey_window.clone(),
-    )
+    state.config.clone()
   };
+  register_hotkeys_from_config(app, &config)
+}
 
-  let region_shortcut: Shortcut = region_str.parse().map_err(|e| {
-    format!("Invalid region hotkey '{}': {}", region_str, e)
+/// Register hotkeys from a provided config (does NOT read state).
+fn register_hotkeys_from_config(
+  app: &AppHandle,
+  config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+  let region_shortcut: Shortcut = config.hotkey_region.parse().map_err(|e| {
+    format!("Invalid region hotkey '{}': {}", config.hotkey_region, e)
   })?;
-  let fullscreen_shortcut: Shortcut = fullscreen_str.parse().map_err(|e| {
-    format!("Invalid fullscreen hotkey '{}': {}", fullscreen_str, e)
+  let fullscreen_shortcut: Shortcut = config.hotkey_fullscreen.parse().map_err(|e| {
+    format!("Invalid fullscreen hotkey '{}': {}", config.hotkey_fullscreen, e)
   })?;
-  let window_shortcut: Shortcut = window_str.parse().map_err(|e| {
-    format!("Invalid window hotkey '{}': {}", window_str, e)
+  let window_shortcut: Shortcut = config.hotkey_window.parse().map_err(|e| {
+    format!("Invalid window hotkey '{}': {}", config.hotkey_window, e)
   })?;
 
   app.global_shortcut().on_shortcut(region_shortcut, {
@@ -62,7 +66,12 @@ pub fn unregister_all(app: &AppHandle) {
   app.global_shortcut().unregister_all().ok();
 }
 
-pub fn reload_hotkeys(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+/// Validate and register hotkeys from a new config without touching state.
+/// Used by save_config to validate hotkeys BEFORE persisting.
+pub fn reload_hotkeys_with_config(
+  app: &AppHandle,
+  config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
   unregister_all(app);
-  register_hotkeys(app)
+  register_hotkeys_from_config(app, config)
 }

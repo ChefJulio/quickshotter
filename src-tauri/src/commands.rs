@@ -396,10 +396,13 @@ pub async fn save_config(
     return Err(AppError::Config("Invalid date format in filename suffix".to_string()));
   }
 
+  // Validate hotkeys before persisting -- avoids saving config with broken hotkeys
+  hotkeys::reload_hotkeys_with_config(&app, &new_config)
+    .map_err(|e| AppError::Config(e.to_string()))?;
+
   app.state::<Mutex<AppState>>().lock_or_recover().config = new_config.clone();
   config::save_config(&app, &new_config)?;
 
-  hotkeys::reload_hotkeys(&app).map_err(|e| AppError::Config(e.to_string()))?;
   crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
   tray::refresh_tray_menu(&app);
 
