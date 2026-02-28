@@ -45,7 +45,8 @@ jobs:
             libxcb-xfixes0-dev \
             libxcb-shm0-dev \
             libxcb-randr0-dev \
-            libxcb-composite0-dev
+            libxcb-composite0-dev \
+            libpipewire-0.3-dev
 
       - name: Setup Node
         uses: actions/setup-node@v4
