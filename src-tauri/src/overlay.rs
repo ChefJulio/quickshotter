@@ -61,14 +61,17 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     .skip_taskbar(true)
     .build()?;
 
-  // Extract overlay HWND for window detection exclusion
-  #[cfg(target_os = "windows")]
+  // Find overlay's xcap window ID for window detection exclusion
   {
-    if let Ok(hwnd) = _overlay.hwnd() {
-      let state = app.state::<Mutex<AppState>>();
-      let mut state = state.lock().unwrap();
-      state.overlay_hwnd = hwnd.0 as isize;
-    }
+    let overlay_id = xcap::Window::all()
+      .unwrap_or_default()
+      .iter()
+      .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
+      .and_then(|w| w.id().ok())
+      .unwrap_or(0);
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().unwrap();
+    state.overlay_window_id = overlay_id;
   }
 
   Ok(())
@@ -83,7 +86,7 @@ pub fn close_overlay(app: &AppHandle) {
   state.is_capturing = false;
   state.pending_screenshot = None;
   state.pending_base64 = None;
-  state.overlay_hwnd = 0;
+  state.overlay_window_id = 0;
 }
 
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {

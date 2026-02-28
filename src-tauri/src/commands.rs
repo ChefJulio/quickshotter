@@ -194,13 +194,13 @@ pub async fn complete_region_capture(
 
 #[tauri::command]
 pub fn get_window_at_cursor(app: AppHandle) -> Option<window_capture::WindowRect> {
-  let exclude_hwnd = {
+  let exclude_id = {
     let state = app.state::<Mutex<AppState>>();
     let state = state.lock().unwrap();
-    state.overlay_hwnd
+    state.overlay_window_id
   };
   let (cx, cy) = window_capture::get_cursor_pos();
-  window_capture::get_window_rect_at(cx, cy, exclude_hwnd)
+  window_capture::get_window_rect_at(cx, cy, exclude_id)
 }
 
 #[tauri::command]
@@ -428,7 +428,7 @@ pub async fn save_config(
   config::save_config(&app, &new_config)?;
 
   hotkeys::reload_hotkeys(&app).map_err(|e| AppError::Config(e.to_string()))?;
-  crate::startup::set_launch_on_startup(new_config.launch_on_startup);
+  crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
 
   Ok(())
 }
@@ -489,76 +489,24 @@ pub fn show_settings_window(app: &AppHandle) {
   }
 }
 
-fn notify_capture(_app: &AppHandle, filepath: Option<&str>) {
-  let filepath_owned = filepath.map(|s| s.to_string());
+fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
+  use tauri_plugin_notification::NotificationExt;
 
-  std::thread::spawn(move || {
-    let (title, body) = match filepath_owned.as_deref() {
-      Some(fp) => {
-        let filename = std::path::Path::new(fp)
-          .file_name()
-          .map(|n| n.to_string_lossy().to_string())
-          .unwrap_or_else(|| "screenshot".to_string());
-        ("Screenshot saved".to_string(), filename)
-      }
-      None => ("Screenshot captured".to_string(), "Copied to clipboard".to_string()),
-    };
-
-    #[cfg(target_os = "windows")]
-    {
-      use tauri_winrt_notification::Toast;
-
-      let fp_clone = filepath_owned.clone();
-      let mut toast = Toast::new(Toast::POWERSHELL_APP_ID)
-        .title(&title)
-        .text1(&body);
-
-      if filepath_owned.is_some() {
-        toast = toast
-          .add_button("Show in folder", "open_folder")
-          .on_activated(move |action| {
-            if action.is_none() || action.as_deref() == Some("open_folder") {
-              if let Some(ref fp) = fp_clone {
-                reveal_in_explorer(std::path::Path::new(fp));
-              }
-            }
-            Ok(())
-          });
-      }
-
-      toast.show().ok();
+  let (title, body) = match filepath {
+    Some(fp) => {
+      let filename = std::path::Path::new(fp)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "screenshot".to_string());
+      ("Screenshot saved".to_string(), filename)
     }
+    None => ("Screenshot captured".to_string(), "Copied to clipboard".to_string()),
+  };
 
-    #[cfg(not(target_os = "windows"))]
-    {
-      // TODO: add notify-rust dependency for macOS/Linux notifications
-      eprintln!("{}: {}", title, body);
-    }
-  });
-}
-
-fn reveal_in_explorer(path: &std::path::Path) {
-  #[cfg(target_os = "windows")]
-  {
-    std::process::Command::new("explorer")
-      .arg(format!("/select,{}", path.display()))
-      .spawn()
-      .ok();
-  }
-  #[cfg(target_os = "macos")]
-  {
-    std::process::Command::new("open")
-      .args(["-R", &path.to_string_lossy()])
-      .spawn()
-      .ok();
-  }
-  #[cfg(target_os = "linux")]
-  {
-    if let Some(parent) = path.parent() {
-      std::process::Command::new("xdg-open")
-        .arg(parent)
-        .spawn()
-        .ok();
-    }
-  }
+  app.notification()
+    .builder()
+    .title(&title)
+    .body(&body)
+    .show()
+    .ok();
 }
