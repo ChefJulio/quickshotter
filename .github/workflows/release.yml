@@ -77,7 +77,16 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'QuickShotter ${{ github.ref_name }}'
-          releaseBody: 'See assets below to download QuickShotter.'
+          releaseBody: |
+            ## Download
+
+            | Platform | File |
+            |----------|------|
+            | **Windows** (64-bit) | `_x64-setup.exe` |
+            | **macOS** (Apple Silicon - M1/M2/M3/M4) | `_aarch64.dmg` |
+            | **macOS** (Intel) | `_x64.dmg` |
+            | **Linux** (Debian/Ubuntu) | `_amd64.deb` |
+            | **Linux** (Universal) | `_amd64.AppImage` |
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
