@@ -9,6 +9,7 @@ use crate::hotkeys;
 use crate::overlay;
 use crate::state::AppState;
 use crate::tray;
+use crate::window_capture;
 
 #[derive(serde::Serialize)]
 pub struct CaptureResultDto {
@@ -16,15 +17,23 @@ pub struct CaptureResultDto {
   pub copied_to_clipboard: bool,
 }
 
-/// Returns "instant" or "freeze" so the overlay JS knows which mode to use.
+#[derive(serde::Serialize)]
+pub struct AnnotationConfigDto {
+  pub shift_tool: String,
+  pub ctrl_tool: String,
+  pub alt_tool: String,
+  pub default_tool: String,
+}
+
+/// Returns "instant", "freeze", or "window" so the overlay JS knows which mode.
 #[tauri::command]
 pub fn get_overlay_mode(app: AppHandle) -> String {
   let state = app.state::<Mutex<AppState>>();
   let state = state.lock().unwrap();
-  state.config.capture_mode.clone()
+  state.overlay_mode.clone()
 }
 
-/// In freeze mode, the overlay pulls the pre-captured screenshot.
+/// In freeze/window mode, the overlay pulls the pre-captured screenshot.
 #[tauri::command]
 pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
   let state = app.state::<Mutex<AppState>>();
@@ -47,8 +56,24 @@ pub async fn trigger_fullscreen_capture(app: AppHandle) -> Result<CaptureResultD
   do_fullscreen_capture(&app).await
 }
 
+#[tauri::command]
+pub fn trigger_window_capture(app: AppHandle) -> Result<(), AppError> {
+  overlay::open_overlay_with_mode(&app, "window")
+}
+
 pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
   let screen = capture::capture_all_monitors()?;
+
+  let annotate = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.annotate_captures
+  };
+
+  if annotate {
+    return open_annotation_for_image(app, screen.image).await;
+  }
+
   capture::copy_to_clipboard(&screen.image)?;
 
   let config = {
@@ -97,7 +122,6 @@ pub async fn complete_region_capture(
   }
 
   if w < 3 || h < 3 {
-    // Defer destroy so the invoke response can be sent first
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
     return Err(AppError::Capture("Selection too small".to_string()));
@@ -107,11 +131,10 @@ pub async fn complete_region_capture(
   let mode = {
     let state = app.state::<Mutex<AppState>>();
     let state = state.lock().unwrap();
-    state.config.capture_mode.clone()
+    state.overlay_mode.clone()
   };
 
-  let image = if mode == "freeze" {
-    // Freeze mode: crop from the pre-captured screenshot
+  let image = if mode == "freeze" || mode == "window" {
     let state = app.state::<Mutex<AppState>>();
     let state = state.lock().unwrap();
     let screenshot = state
@@ -120,11 +143,25 @@ pub async fn complete_region_capture(
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
     image::imageops::crop_imm(screenshot, left, top, w, h).to_image()
   } else {
-    // Instant mode: overlay is hidden, brief delay then capture
     std::thread::sleep(std::time::Duration::from_millis(50));
     let screen = capture::capture_all_monitors()?;
     image::imageops::crop_imm(&screen.image, left, top, w, h).to_image()
   };
+
+  // Defer overlay destroy
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+
+  // Check if we should open annotation editor
+  let annotate = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.annotate_captures
+  };
+
+  if annotate {
+    return open_annotation_for_image(&app, image).await;
+  }
 
   capture::copy_to_clipboard(&image)?;
 
@@ -147,9 +184,100 @@ pub async fn complete_region_capture(
   tray::refresh_tray_menu(&app);
   notify_capture(&app, filepath_str.as_deref());
 
-  // Defer overlay destroy so the invoke response gets sent back first
+  Ok(CaptureResultDto {
+    filepath: filepath_str,
+    copied_to_clipboard: true,
+  })
+}
+
+// -- Window capture commands --
+
+#[tauri::command]
+pub fn get_window_at_cursor(app: AppHandle) -> Option<window_capture::WindowRect> {
+  let exclude_hwnd = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.overlay_hwnd
+  };
+  let (cx, cy) = window_capture::get_cursor_pos();
+  window_capture::get_window_rect_at(cx, cy, exclude_hwnd)
+}
+
+#[tauri::command]
+pub async fn complete_window_capture(
+  app: AppHandle,
+  left: i32,
+  top: i32,
+  right: i32,
+  bottom: i32,
+) -> Result<CaptureResultDto, AppError> {
+  // Hide overlay immediately
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+
+  let w = (right - left) as u32;
+  let h = (bottom - top) as u32;
+
+  if w < 3 || h < 3 {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+    return Err(AppError::Capture("Window too small".to_string()));
+  }
+
+  // Get the origin offset from the virtual desktop
+  let bounds = capture::get_desktop_bounds()?;
+  let origin_x = bounds.x;
+  let origin_y = bounds.y;
+
+  let crop_x = (left - origin_x) as u32;
+  let crop_y = (top - origin_y) as u32;
+
+  let image = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    let screenshot = state
+      .pending_screenshot
+      .as_ref()
+      .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
+    image::imageops::crop_imm(screenshot, crop_x, crop_y, w, h).to_image()
+  };
+
+  // Defer overlay destroy
   let app2 = app.clone();
   tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+
+  // Check if we should open annotation editor
+  let annotate = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.annotate_captures
+  };
+
+  if annotate {
+    return open_annotation_for_image(&app, image).await;
+  }
+
+  capture::copy_to_clipboard(&image)?;
+
+  let config = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.clone()
+  };
+
+  let saved = capture::save_to_disk(&image, &config)?;
+  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
+
+  if let Some(ref path) = saved {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().unwrap();
+    state.add_to_history(path.clone());
+    state.last_saved_path = Some(path.clone());
+  }
+
+  tray::refresh_tray_menu(&app);
+  notify_capture(&app, filepath_str.as_deref());
 
   Ok(CaptureResultDto {
     filepath: filepath_str,
@@ -157,9 +285,116 @@ pub async fn complete_region_capture(
   })
 }
 
+// -- Annotation commands --
+
+/// Store image for annotation and open the editor window.
+async fn open_annotation_for_image(
+  app: &AppHandle,
+  image: image::RgbaImage,
+) -> Result<CaptureResultDto, AppError> {
+  let base64 = capture::image_to_base64_png(&image)?;
+
+  {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().unwrap();
+    state.pending_annotation = Some(image);
+    state.pending_annotation_base64 = Some(base64);
+  }
+
+  overlay::open_annotation_window(app)?;
+
+  // Return a placeholder -- the actual save happens from the annotation editor
+  Ok(CaptureResultDto {
+    filepath: None,
+    copied_to_clipboard: false,
+  })
+}
+
+/// Annotation editor: fetch the pending image as base64 PNG.
+#[tauri::command]
+pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
+  let state = app.state::<Mutex<AppState>>();
+  let state = state.lock().unwrap();
+  state
+    .pending_annotation_base64
+    .clone()
+    .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))
+}
+
+/// Annotation editor: fetch modifier-to-tool config.
+#[tauri::command]
+pub fn get_annotation_config(app: AppHandle) -> AnnotationConfigDto {
+  let state = app.state::<Mutex<AppState>>();
+  let state = state.lock().unwrap();
+  AnnotationConfigDto {
+    shift_tool: state.config.annotate_shift_tool.clone(),
+    ctrl_tool: state.config.annotate_ctrl_tool.clone(),
+    alt_tool: state.config.annotate_alt_tool.clone(),
+    default_tool: state.config.annotate_default_tool.clone(),
+  }
+}
+
+/// Annotation editor: save the composited annotated image.
+/// Receives the final image as a base64-encoded PNG from the canvas.
+#[tauri::command]
+pub async fn save_annotated_capture(
+  app: AppHandle,
+  image_base64: String,
+) -> Result<CaptureResultDto, AppError> {
+  // Decode base64 PNG to RgbaImage
+  let png_bytes = base64::Engine::decode(
+    &base64::engine::general_purpose::STANDARD,
+    &image_base64,
+  )
+  .map_err(|e| AppError::Annotation(format!("Failed to decode base64: {e}")))?;
+
+  let img = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
+    .map_err(|e| AppError::Annotation(format!("Failed to decode PNG: {e}")))?
+    .to_rgba8();
+
+  capture::copy_to_clipboard(&img)?;
+
+  let config = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.clone()
+  };
+
+  let saved = capture::save_to_disk(&img, &config)?;
+  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
+
+  if let Some(ref path) = saved {
+    let state = app.state::<Mutex<AppState>>();
+    let mut state = state.lock().unwrap();
+    state.add_to_history(path.clone());
+    state.last_saved_path = Some(path.clone());
+  }
+
+  tray::refresh_tray_menu(&app);
+  notify_capture(&app, filepath_str.as_deref());
+
+  // Close annotation window and clean up state
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_annotation_window(&app2); });
+
+  Ok(CaptureResultDto {
+    filepath: filepath_str,
+    copied_to_clipboard: true,
+  })
+}
+
+/// Annotation editor: discard without saving.
+#[tauri::command]
+pub async fn cancel_annotation(app: AppHandle) {
+  if let Some(win) = app.get_webview_window("annotation") {
+    win.hide().ok();
+  }
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_annotation_window(&app2); });
+}
+
 #[tauri::command]
 pub async fn cancel_capture(app: AppHandle) -> Result<(), AppError> {
-  // Hide immediately, defer destroy so invoke response can be sent
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
@@ -193,6 +428,7 @@ pub async fn save_config(
   config::save_config(&app, &new_config)?;
 
   hotkeys::reload_hotkeys(&app).map_err(|e| AppError::Config(e.to_string()))?;
+  crate::startup::set_launch_on_startup(new_config.launch_on_startup);
 
   Ok(())
 }
@@ -204,6 +440,37 @@ pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, AppError> {
   Ok(folder.map(|p| p.to_string()))
 }
 
+#[tauri::command]
+pub fn validate_save_folder(folder: String) -> String {
+  let path = std::path::PathBuf::from(&folder);
+  if path.exists() {
+    if path.is_dir() {
+      // Try to check writability by creating a temp file
+      let test_path = path.join(".quickshotter_write_test");
+      match std::fs::write(&test_path, b"") {
+        Ok(_) => {
+          std::fs::remove_file(&test_path).ok();
+          "ok".to_string()
+        }
+        Err(_) => "Folder exists but is not writable".to_string(),
+      }
+    } else {
+      "Path exists but is not a directory".to_string()
+    }
+  } else {
+    // Check if parent is writable
+    if let Some(parent) = path.parent() {
+      if parent.exists() && parent.is_dir() {
+        "ok".to_string() // Parent exists, folder can be created
+      } else {
+        "Parent directory does not exist".to_string()
+      }
+    } else {
+      "Invalid path".to_string()
+    }
+  }
+}
+
 // -- Utility --
 
 pub fn show_settings_window(app: &AppHandle) {
@@ -213,7 +480,7 @@ pub fn show_settings_window(app: &AppHandle) {
   } else {
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
       .title("QuickShotter Settings")
-      .inner_size(480.0, 520.0)
+      .inner_size(480.0, 800.0)
       .resizable(false)
       .center()
       .always_on_top(true)

@@ -22,6 +22,11 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Region capture failed: {e}");
           }
         }
+        "capture_window" => {
+          if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "window") {
+            eprintln!("Window capture failed: {e}");
+          }
+        }
         "capture_fullscreen" => {
           let app = app.clone();
           tauri::async_runtime::spawn(async move {
@@ -63,6 +68,10 @@ pub fn build_tray_menu(
 
   builder = builder.item(
     &MenuItemBuilder::with_id("capture_region", "Capture Region  (Ctrl+Alt+Shift+S)")
+      .build(app)?,
+  );
+  builder = builder.item(
+    &MenuItemBuilder::with_id("capture_window", "Capture Window  (Ctrl+Alt+Shift+W)")
       .build(app)?,
   );
   builder = builder.item(

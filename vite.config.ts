@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         overlay: resolve(__dirname, "overlay.html"),
+        annotation: resolve(__dirname, "annotation.html"),
       },
     },
   },

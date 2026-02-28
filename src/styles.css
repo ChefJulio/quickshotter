@@ -126,3 +126,67 @@ button:hover {
 #save-btn:hover {
   background: #1976d2;
 }
+
+.section-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ddd;
+}
+
+@media (prefers-color-scheme: dark) {
+  .section-header { color: #999; border-color: #444; }
+}
+
+.modifier-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.modifier-row label {
+  width: 50px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 0;
+}
+
+.modifier-row select {
+  flex: 1;
+  min-width: 80px;
+}
+
+/* Hotkey recorder */
+.hotkey-input {
+  cursor: pointer;
+}
+
+.hotkey-input.recording {
+  background-color: #fff3cd;
+  color: #856404;
+  border-color: #ffc107;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hotkey-input.recording {
+    background-color: #3d3518;
+    color: #ffc107;
+    border-color: #ffc107;
+  }
+}
+
+/* Folder validation warning */
+.folder-warning {
+  display: block;
+  font-size: 12px;
+  color: #e67e22;
+  margin-top: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .folder-warning { color: #f0a040; }
+}

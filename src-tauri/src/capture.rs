@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 use base64::Engine;
-use image::{GenericImage, ImageBuffer, RgbaImage};
+use image::{GenericImage, ImageBuffer, ImageEncoder, RgbaImage};
 use std::io::Cursor;
 use std::path::PathBuf;
 use xcap::Monitor;
@@ -9,6 +9,7 @@ use crate::config::AppConfig;
 use crate::error::AppError;
 
 /// Virtual desktop bounds returned alongside the stitched screenshot.
+#[allow(dead_code)]
 pub struct ScreenCapture {
   pub image: RgbaImage,
   pub origin_x: i32,
@@ -136,6 +137,16 @@ pub fn image_to_base64(img: &RgbaImage) -> Result<String, AppError> {
   Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
+/// Encode an image as lossless PNG base64 for the annotation editor.
+pub fn image_to_base64_png(img: &RgbaImage) -> Result<String, AppError> {
+  let mut buf = Cursor::new(Vec::new());
+  let encoder = image::codecs::png::PngEncoder::new(&mut buf);
+  encoder
+    .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
+    .map_err(|e: image::ImageError| AppError::Capture(e.to_string()))?;
+  Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
 /// Copy an RGBA image to the system clipboard.
 pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), AppError> {
   let mut clipboard = Clipboard::new().map_err(|e| AppError::Clipboard(e.to_string()))?;
@@ -159,10 +170,19 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
   let folder = PathBuf::from(&config.save_folder);
   std::fs::create_dir_all(&folder)?;
 
-  let timestamp = chrono::Local::now().format("%Y-%m-%d_%H%M%S");
+  let timestamp = chrono::Local::now().format(&config.filename_suffix);
   let ext = &config.format;
-  let filename = format!("{}_{}.{}", config.filename_prefix, timestamp, ext);
-  let filepath = folder.join(&filename);
+  // Sanitize prefix to prevent path traversal
+  let safe_prefix = config.filename_prefix.replace(['/', '\\'], "_").replace("..", "_");
+  let base_name = format!("{}_{}", safe_prefix, timestamp);
+  let mut filepath = folder.join(format!("{}.{}", base_name, ext));
+
+  // Collision avoidance: append _2, _3, etc. if file exists
+  let mut counter = 2u32;
+  while filepath.exists() {
+    filepath = folder.join(format!("{}_{}.{}", base_name, counter, ext));
+    counter += 1;
+  }
 
   match ext.as_str() {
     "jpg" | "jpeg" => {

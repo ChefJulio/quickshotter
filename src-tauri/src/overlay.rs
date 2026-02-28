@@ -6,6 +6,15 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
+  let mode = {
+    let state = app.state::<Mutex<AppState>>();
+    let state = state.lock().unwrap();
+    state.config.capture_mode.clone()
+  };
+  open_overlay_with_mode(app, &mode)
+}
+
+pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
   // Check if already capturing
   {
     let state = app.state::<Mutex<AppState>>();
@@ -18,15 +27,10 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
   // Get virtual desktop bounds (fast, no image capture)
   let bounds = capture::get_desktop_bounds()?;
 
-  // Read capture mode from config
-  let mode = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.capture_mode.clone()
-  };
+  // Window mode always uses freeze-style (capture first, show frozen)
+  let needs_capture = mode == "freeze" || mode == "window";
 
-  if mode == "freeze" {
-    // Freeze mode: capture screen first, show it as overlay background
+  if needs_capture {
     let screen = capture::capture_all_monitors()?;
     let base64_data = capture::image_to_base64(&screen.image)?;
 
@@ -34,18 +38,19 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
       let state = app.state::<Mutex<AppState>>();
       let mut state = state.lock().unwrap();
       state.is_capturing = true;
+      state.overlay_mode = mode.to_string();
       state.pending_screenshot = Some(screen.image);
       state.pending_base64 = Some(base64_data);
     }
   } else {
-    // Instant mode: no capture, just mark as capturing
     let state = app.state::<Mutex<AppState>>();
     let mut state = state.lock().unwrap();
     state.is_capturing = true;
+    state.overlay_mode = mode.to_string();
   }
 
   // Span overlay across the entire virtual desktop (all monitors)
-  WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+  let _overlay = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
     .title("QuickShotter Overlay")
     .transparent(true)
     .decorations(false)
@@ -55,6 +60,16 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
     .visible(false)
     .skip_taskbar(true)
     .build()?;
+
+  // Extract overlay HWND for window detection exclusion
+  #[cfg(target_os = "windows")]
+  {
+    if let Ok(hwnd) = _overlay.hwnd() {
+      let state = app.state::<Mutex<AppState>>();
+      let mut state = state.lock().unwrap();
+      state.overlay_hwnd = hwnd.0 as isize;
+    }
+  }
 
   Ok(())
 }
@@ -68,4 +83,27 @@ pub fn close_overlay(app: &AppHandle) {
   state.is_capturing = false;
   state.pending_screenshot = None;
   state.pending_base64 = None;
+  state.overlay_hwnd = 0;
+}
+
+pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
+  WebviewWindowBuilder::new(app, "annotation", WebviewUrl::App("annotation.html".into()))
+    .title("QuickShotter - Annotate")
+    .fullscreen(true)
+    .decorations(false)
+    .always_on_top(true)
+    .visible(false)
+    .skip_taskbar(true)
+    .build()?;
+  Ok(())
+}
+
+pub fn close_annotation_window(app: &AppHandle) {
+  if let Some(win) = app.get_webview_window("annotation") {
+    win.destroy().ok();
+  }
+  let state = app.state::<Mutex<AppState>>();
+  let mut state = state.lock().unwrap();
+  state.pending_annotation = None;
+  state.pending_annotation_base64 = None;
 }

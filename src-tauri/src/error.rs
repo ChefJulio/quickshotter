@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum AppError {
   #[error("Capture failed: {0}")]
   Capture(String),
@@ -10,6 +11,10 @@ pub enum AppError {
   Io(#[from] std::io::Error),
   #[error("Config error: {0}")]
   Config(String),
+  #[error("Window detection error: {0}")]
+  Window(String),
+  #[error("Annotation error: {0}")]
+  Annotation(String),
   #[error("Tauri error: {0}")]
   Tauri(#[from] tauri::Error),
 }

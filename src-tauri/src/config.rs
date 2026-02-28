@@ -10,15 +10,55 @@ pub struct AppConfig {
   pub save_folder: String,
   pub hotkey_region: String,
   pub hotkey_fullscreen: String,
+  #[serde(default = "default_hotkey_window")]
+  pub hotkey_window: String,
   pub format: String,
   pub filename_prefix: String,
   pub save_to_disk: bool,
   #[serde(default = "default_capture_mode")]
   pub capture_mode: String,
+  #[serde(default)]
+  pub annotate_captures: bool,
+  #[serde(default = "default_shift_tool")]
+  pub annotate_shift_tool: String,
+  #[serde(default = "default_ctrl_tool")]
+  pub annotate_ctrl_tool: String,
+  #[serde(default = "default_alt_tool")]
+  pub annotate_alt_tool: String,
+  #[serde(default = "default_annotate_default_tool")]
+  pub annotate_default_tool: String,
+  #[serde(default = "default_filename_suffix")]
+  pub filename_suffix: String,
+  #[serde(default)]
+  pub launch_on_startup: bool,
+}
+
+fn default_annotate_default_tool() -> String {
+  "freehand".to_string()
+}
+
+fn default_filename_suffix() -> String {
+  "%Y-%m-%d_%H-%M-%S".to_string()
 }
 
 fn default_capture_mode() -> String {
   "instant".to_string()
+}
+
+fn default_hotkey_window() -> String {
+  "CmdOrCtrl+Alt+Shift+W".to_string()
+}
+
+fn default_shift_tool() -> String {
+  "arrow".to_string()
+}
+
+fn default_ctrl_tool() -> String {
+  "oval".to_string()
+}
+
+fn default_alt_tool() -> String {
+  "text".to_string()
 }
 
 impl Default for AppConfig {
@@ -27,10 +67,18 @@ impl Default for AppConfig {
       save_folder: default_save_folder(),
       hotkey_region: "CmdOrCtrl+Alt+Shift+S".to_string(),
       hotkey_fullscreen: "CmdOrCtrl+Alt+Shift+D".to_string(),
-      format: "jpg".to_string(),
-      filename_prefix: "quickshotter".to_string(),
+      hotkey_window: default_hotkey_window(),
+      format: "png".to_string(),
+      filename_prefix: "screenshot".to_string(),
       save_to_disk: true,
       capture_mode: "instant".to_string(),
+      annotate_captures: false,
+      annotate_shift_tool: default_shift_tool(),
+      annotate_ctrl_tool: default_ctrl_tool(),
+      annotate_alt_tool: default_alt_tool(),
+      annotate_default_tool: default_annotate_default_tool(),
+      filename_suffix: default_filename_suffix(),
+      launch_on_startup: false,
     }
   }
 }

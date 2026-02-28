@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuickShotter - Annotate</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; user-select: none; }
+    canvas { display: block; }
+
+    #annotation-toolbar {
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(40, 40, 40, 0.92);
+      border-radius: 8px;
+      padding: 4px 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      z-index: 10;
+    }
+
+    .drag-handle {
+      color: #888;
+      font-weight: bold;
+      font-size: 14px;
+      cursor: move;
+      padding: 0 4px;
+      user-select: none;
+    }
+
+    .tool-btn {
+      width: 32px;
+      height: 32px;
+      background: transparent;
+      border: 1px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px;
+    }
+    .tool-btn:hover { background: rgba(255, 255, 255, 0.08); }
+    .tool-btn.active { background: rgba(255, 255, 255, 0.15); border-color: #aaa; }
+    .tool-btn svg { width: 20px; height: 20px; }
+
+    .separator {
+      color: #555;
+      font-size: 14px;
+      padding: 0 2px;
+    }
+
+    #arrow-style {
+      background: #333;
+      color: #ccc;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 2px 4px;
+      height: 28px;
+      cursor: pointer;
+    }
+
+    #color-picker {
+      width: 28px;
+      height: 28px;
+      border: 2px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 0;
+      background: none;
+    }
+    #color-picker:hover { border-color: #aaa; }
+
+    .spinner-label {
+      color: #ccc;
+      font-size: 11px;
+      font-family: sans-serif;
+    }
+
+    .spinner {
+      width: 50px;
+      height: 28px;
+      background: #333;
+      color: #ccc;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .action-btn {
+      height: 28px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: sans-serif;
+      cursor: pointer;
+    }
+    .action-btn:hover { background: rgba(255, 255, 255, 0.08); }
+    .action-btn:disabled { color: #555; border-color: #444; cursor: default; }
+    .action-btn:disabled:hover { background: transparent; }
+
+    .action-btn.save { color: #8f8; }
+    .action-btn.cancel { color: #f88; }
+    .action-btn.undo-redo { color: #ccc; }
+
+    #text-input-container {
+      position: absolute;
+      z-index: 20;
+    }
+    #text-input {
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #ff0000;
+      border-radius: 3px;
+      padding: 2px 6px;
+      color: #ff0000;
+      font-size: 16px;
+      font-family: sans-serif;
+      min-width: 100px;
+      max-width: 400px;
+      outline: none;
+    }
+  </style>
+  <script type="module" src="/src/annotation.ts" defer></script>
+</head>
+<body>
+  <canvas id="annotation-canvas"></canvas>
+
+  <div id="annotation-toolbar">
+    <span class="drag-handle">:::</span>
+
+    <button class="tool-btn active" id="tool-freehand" title="Freehand (default drag)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2" stroke-linecap="round">
+        <path d="M3 17 Q8 5 12 14 Q16 23 21 8"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-arrow" title="Arrow (Shift+drag)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2" stroke-linecap="round">
+        <line x1="4" y1="20" x2="18" y2="6"/>
+        <polyline points="10,4 20,4 20,14" fill="#c8c8c8" stroke="#c8c8c8" stroke-width="1.5"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-oval" title="Oval (Ctrl+drag)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2">
+        <ellipse cx="12" cy="12" rx="9" ry="7"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-rect" title="Rectangle (Alt+drag)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2">
+        <rect x="3" y="5" width="18" height="14" rx="1"/>
+      </svg>
+    </button>
+    <button class="tool-btn" id="tool-text" title="Text (Alt+click)">
+      <svg viewBox="0 0 24 24" fill="#c8c8c8">
+        <text x="12" y="18" font-size="16" font-weight="bold" text-anchor="middle" font-family="sans-serif">A</text>
+      </svg>
+    </button>
+
+    <span class="separator">|</span>
+
+    <select id="arrow-style">
+      <option value="standard">Filled</option>
+      <option value="open">Hollow</option>
+      <option value="double">Double</option>
+    </select>
+
+    <span class="separator">|</span>
+
+    <input type="color" id="color-picker" value="#ff0000" title="Annotation color" />
+
+    <span class="spinner-label">W:</span>
+    <input type="number" id="stroke-width" min="1" max="20" value="3" class="spinner" />
+
+    <span class="spinner-label">Pt:</span>
+    <input type="number" id="font-size" min="8" max="72" value="16" class="spinner" />
+
+    <span class="separator">|</span>
+
+    <button id="btn-undo" class="action-btn undo-redo" disabled title="Undo (Ctrl+Z)">Undo</button>
+    <button id="btn-redo" class="action-btn undo-redo" disabled title="Redo (Ctrl+Shift+Z)">Redo</button>
+
+    <span class="separator">|</span>
+
+    <button id="btn-save" class="action-btn save" title="Save (Enter)">Save</button>
+    <button id="btn-cancel" class="action-btn cancel" title="Cancel (Escape)">Cancel</button>
+  </div>
+
+  <div id="text-input-container" style="display: none;">
+    <input type="text" id="text-input" placeholder="Type text..." />
+  </div>
+</body>
+</html>

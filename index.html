@@ -17,17 +17,23 @@
           <input type="text" id="save-folder" />
           <button id="browse-btn" type="button">Browse...</button>
         </div>
+        <span id="folder-warning" class="folder-warning" style="display: none;"></span>
       </div>
 
       <div class="field">
         <label for="hotkey-region">Region hotkey</label>
-        <input type="text" id="hotkey-region" />
+        <input type="text" id="hotkey-region" class="hotkey-input" readonly placeholder="Click to record..." />
       </div>
 
       <div class="field">
         <label for="hotkey-fullscreen">Fullscreen hotkey</label>
-        <input type="text" id="hotkey-fullscreen" />
-        <span class="hint">e.g. CmdOrCtrl+Alt+Shift+S</span>
+        <input type="text" id="hotkey-fullscreen" class="hotkey-input" readonly placeholder="Click to record..." />
+      </div>
+
+      <div class="field">
+        <label for="hotkey-window">Window capture hotkey</label>
+        <input type="text" id="hotkey-window" class="hotkey-input" readonly placeholder="Click to record..." />
+        <span class="hint">Click to record a key combination (requires at least one modifier)</span>
       </div>
 
       <div class="field">
@@ -44,6 +50,12 @@
         <input type="text" id="filename-prefix" />
       </div>
 
+      <div class="field">
+        <label for="filename-suffix">Filename date format</label>
+        <input type="text" id="filename-suffix" />
+        <span class="hint">strftime format, e.g. %Y-%m-%d_%H-%M-%S</span>
+      </div>
+
       <div class="field checkbox-field">
         <input type="checkbox" id="save-to-disk" />
         <label for="save-to-disk">Also save screenshots to disk</label>
@@ -56,6 +68,63 @@
           <option value="freeze">Freeze (captures screen first)</option>
         </select>
         <span class="hint">Instant shows overlay immediately; Freeze captures the screen first so it stays still</span>
+      </div>
+
+      <div class="field checkbox-field">
+        <input type="checkbox" id="annotate-captures" />
+        <label for="annotate-captures">Open annotation editor after capture</label>
+      </div>
+
+      <div id="annotation-options">
+        <p class="section-header">Annotation tool mappings</p>
+        <div class="modifier-row">
+          <label for="mod-default">Default</label>
+          <select id="mod-default">
+            <option value="freehand">Freehand</option>
+            <option value="arrow">Arrow</option>
+            <option value="oval">Oval</option>
+            <option value="rect">Rectangle</option>
+            <option value="text">Text</option>
+          </select>
+        </div>
+        <div class="modifier-row">
+          <label for="mod-shift">Shift</label>
+          <select id="mod-shift">
+            <option value="arrow">Arrow</option>
+            <option value="oval">Oval</option>
+            <option value="rect">Rectangle</option>
+            <option value="text">Text</option>
+            <option value="freehand">Freehand</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="modifier-row">
+          <label for="mod-ctrl">Ctrl</label>
+          <select id="mod-ctrl">
+            <option value="oval">Oval</option>
+            <option value="arrow">Arrow</option>
+            <option value="rect">Rectangle</option>
+            <option value="text">Text</option>
+            <option value="freehand">Freehand</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="modifier-row">
+          <label for="mod-alt">Alt</label>
+          <select id="mod-alt">
+            <option value="text">Text</option>
+            <option value="arrow">Arrow</option>
+            <option value="oval">Oval</option>
+            <option value="rect">Rectangle</option>
+            <option value="freehand">Freehand</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field checkbox-field">
+        <input type="checkbox" id="launch-on-startup" />
+        <label for="launch-on-startup">Launch on startup</label>
       </div>
 
       <div class="buttons">

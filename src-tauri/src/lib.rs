@@ -4,8 +4,10 @@ mod config;
 mod error;
 mod hotkeys;
 mod overlay;
+mod startup;
 mod state;
 mod tray;
+mod window_capture;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -26,6 +28,14 @@ pub fn run() {
       commands::get_config,
       commands::save_config,
       commands::pick_folder,
+      commands::trigger_window_capture,
+      commands::get_window_at_cursor,
+      commands::complete_window_capture,
+      commands::get_pending_annotation,
+      commands::get_annotation_config,
+      commands::save_annotated_capture,
+      commands::cancel_annotation,
+      commands::validate_save_folder,
     ])
     .setup(|app| {
       let config = config::load_config(&app.handle());
