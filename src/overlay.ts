@@ -20,13 +20,19 @@ let currentY = 0;
 let mode: string = 'instant';
 let cancelled = false;
 
+// DPI scale factor: CSS pixels * dpr = physical pixels (what Rust uses)
+const dpr = window.devicePixelRatio || 1;
+
 // Window capture state
 let highlightRect: { x: number; y: number; w: number; h: number } | null = null;
+// Physical-pixel coords from Rust, sent back directly for capture
+let highlightPhysical: { left: number; top: number; right: number; bottom: number } | null = null;
 let windowPollPending = false;
 
 function initCanvas() {
   canvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
   ctx = canvas.getContext('2d')!;
+  // Canvas buffer at CSS pixel resolution; all drawing uses CSS coords
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 
@@ -55,15 +61,15 @@ function loadScreenshot(base64Data: string) {
   img.onload = () => {
     screenshotImage = img;
 
-    canvas.width = img.width;
-    canvas.height = img.height;
-    dimmedCanvas.width = img.width;
-    dimmedCanvas.height = img.height;
+    // Keep canvas at CSS pixel resolution; draw the physical-pixel screenshot
+    // scaled to fit so everything uses a single CSS coordinate space.
+    dimmedCanvas.width = canvas.width;
+    dimmedCanvas.height = canvas.height;
 
-    // Draw dimmed version
-    dimmedCtx.drawImage(img, 0, 0);
+    // Draw screenshot scaled to CSS dimensions
+    dimmedCtx.drawImage(img, 0, 0, canvas.width, canvas.height);
     dimmedCtx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-    dimmedCtx.fillRect(0, 0, img.width, img.height);
+    dimmedCtx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.drawImage(dimmedCanvas, 0, 0);
 
@@ -110,16 +116,21 @@ function onMouseUp(e: MouseEvent) {
   if (!isDragging) return;
   isDragging = false;
 
-  const x1 = Math.min(startX, e.clientX);
-  const y1 = Math.min(startY, e.clientY);
-  const x2 = Math.max(startX, e.clientX);
-  const y2 = Math.max(startY, e.clientY);
+  const cssX1 = Math.min(startX, e.clientX);
+  const cssY1 = Math.min(startY, e.clientY);
+  const cssX2 = Math.max(startX, e.clientX);
+  const cssY2 = Math.max(startY, e.clientY);
 
-  if (x2 - x1 < 3 || y2 - y1 < 3) {
+  if (cssX2 - cssX1 < 3 || cssY2 - cssY1 < 3) {
     cancel();
     return;
   }
 
+  // Convert CSS coords to physical pixels for Rust
+  const x1 = Math.round(cssX1 * dpr);
+  const y1 = Math.round(cssY1 * dpr);
+  const x2 = Math.round(cssX2 * dpr);
+  const y2 = Math.round(cssY2 * dpr);
   invoke('complete_region_capture', { x1, y1, x2, y2 });
 }
 
@@ -135,7 +146,9 @@ function drawSelection() {
 
   if ((mode === 'freeze') && screenshotImage) {
     ctx.drawImage(dimmedCanvas, 0, 0);
-    ctx.drawImage(screenshotImage, x1, y1, w, h, x1, y1, w, h);
+    // Sample the physical-pixel screenshot at scaled coords, draw at CSS coords
+    const sx = x1 * dpr, sy = y1 * dpr, sw = w * dpr, sh = h * dpr;
+    ctx.drawImage(screenshotImage, sx, sy, sw, sh, x1, y1, w, h);
   } else {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
@@ -148,8 +161,10 @@ function drawSelection() {
   ctx.lineWidth = 2;
   ctx.strokeRect(x1, y1, w, h);
 
-  // Dimension label
-  const label = `${w} x ${h}`;
+  // Dimension label -- show physical pixel dimensions (actual capture size)
+  const physW = Math.round(w * dpr);
+  const physH = Math.round(h * dpr);
+  const label = `${physW} x ${physH}`;
   ctx.font = 'bold 13px Consolas, monospace';
   const labelY = y1 > 25 ? y1 - 8 : y2 + 18;
   ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
@@ -169,17 +184,23 @@ function onMouseMoveWindow() {
     try {
       const rect = await invoke<WindowRect | null>('get_window_at_cursor');
       if (rect && screenshotImage) {
-        // Window rects are in screen coordinates; the overlay canvas covers the
-        // entire virtual desktop starting at the same origin, so the coords
-        // map directly to canvas pixels.
+        // Rust returns physical pixel coords; convert to CSS for canvas drawing
         highlightRect = {
-          x: rect.left,
-          y: rect.top,
-          w: rect.right - rect.left,
-          h: rect.bottom - rect.top,
+          x: rect.left / dpr,
+          y: rect.top / dpr,
+          w: (rect.right - rect.left) / dpr,
+          h: (rect.bottom - rect.top) / dpr,
+        };
+        // Keep original physical coords for sending back to Rust
+        highlightPhysical = {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
         };
       } else {
         highlightRect = null;
+        highlightPhysical = null;
       }
       drawWindowHighlight();
     } finally {
@@ -196,8 +217,9 @@ function drawWindowHighlight() {
 
   if (highlightRect) {
     const { x, y, w, h } = highlightRect;
-    // Show bright (un-dimmed) region for the highlighted window
-    ctx.drawImage(screenshotImage, x, y, w, h, x, y, w, h);
+    // Sample the physical-pixel screenshot at scaled coords, draw at CSS coords
+    const sx = x * dpr, sy = y * dpr, sw = w * dpr, sh = h * dpr;
+    ctx.drawImage(screenshotImage, sx, sy, sw, sh, x, y, w, h);
 
     // Blue border around highlighted window
     ctx.strokeStyle = '#00aaff';
@@ -207,14 +229,9 @@ function drawWindowHighlight() {
 }
 
 function onMouseDownWindow() {
-  if (!highlightRect) return;
-  const { x, y, w, h } = highlightRect;
-  invoke('complete_window_capture', {
-    left: x,
-    top: y,
-    right: x + w,
-    bottom: y + h,
-  });
+  if (!highlightPhysical) return;
+  // Send physical pixel coords directly to Rust
+  invoke('complete_window_capture', highlightPhysical);
 }
 
 // -- Keyboard --
@@ -235,11 +252,12 @@ function cancel() {
 }
 
 function captureFullscreen() {
+  // Send physical pixel dimensions to Rust
   invoke('complete_region_capture', {
     x1: 0,
     y1: 0,
-    x2: canvas.width,
-    y2: canvas.height,
+    x2: Math.round(canvas.width * dpr),
+    y2: Math.round(canvas.height * dpr),
   });
 }
 

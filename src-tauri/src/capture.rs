@@ -170,10 +170,11 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
   let folder = PathBuf::from(&config.save_folder);
   std::fs::create_dir_all(&folder)?;
 
-  let timestamp = chrono::Local::now().format(&config.filename_suffix);
   let ext = &config.format;
-  // Sanitize prefix to prevent path traversal
+  // Sanitize prefix and suffix to prevent path traversal
   let safe_prefix = config.filename_prefix.replace(['/', '\\'], "_").replace("..", "_");
+  let safe_suffix = config.filename_suffix.replace(['/', '\\'], "_").replace("..", "_");
+  let timestamp = chrono::Local::now().format(&safe_suffix);
   let base_name = format!("{}_{}", safe_prefix, timestamp);
   let mut filepath = folder.join(format!("{}.{}", base_name, ext));
 

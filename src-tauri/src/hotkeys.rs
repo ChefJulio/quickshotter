@@ -2,12 +2,12 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
-use crate::state::AppState;
+use crate::state::{AppState, LockRecover};
 
 pub fn register_hotkeys(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   let (region_str, fullscreen_str, window_str) = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
     (
       state.config.hotkey_region.clone(),
       state.config.hotkey_fullscreen.clone(),

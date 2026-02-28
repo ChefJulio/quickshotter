@@ -6,10 +6,15 @@ use tauri::{
   tray::TrayIconBuilder,
 };
 
-use crate::state::AppState;
+use crate::state::{AppState, LockRecover};
+
+fn format_hotkey_display(raw: &str) -> String {
+  raw.replace("CmdOrCtrl", "Ctrl")
+}
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-  let menu = build_tray_menu(app, &[])?;
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+  let menu = build_tray_menu(app, &[], &config)?;
 
   TrayIconBuilder::with_id("main")
     .icon(app.default_window_icon().unwrap().clone())
@@ -45,8 +50,8 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           // History items: "history_0", "history_1", etc.
           if id.starts_with("history_") {
             if let Ok(idx) = id.strip_prefix("history_").unwrap().parse::<usize>() {
-              let state = app.state::<Mutex<AppState>>();
-              let state = state.lock().unwrap();
+              let s = app.state::<Mutex<AppState>>();
+              let state = s.lock_or_recover();
               if let Some(path) = state.capture_history.get(idx) {
                 open_in_explorer(path);
               }
@@ -63,19 +68,24 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 pub fn build_tray_menu(
   app: &AppHandle,
   history: &[PathBuf],
+  config: &crate::config::AppConfig,
 ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
   let mut builder = MenuBuilder::new(app);
 
+  let region_label = format!("Capture Region  ({})", format_hotkey_display(&config.hotkey_region));
+  let window_label = format!("Capture Window  ({})", format_hotkey_display(&config.hotkey_window));
+  let fullscreen_label = format!("Capture Fullscreen  ({})", format_hotkey_display(&config.hotkey_fullscreen));
+
   builder = builder.item(
-    &MenuItemBuilder::with_id("capture_region", "Capture Region  (Ctrl+Alt+Shift+S)")
+    &MenuItemBuilder::with_id("capture_region", &region_label)
       .build(app)?,
   );
   builder = builder.item(
-    &MenuItemBuilder::with_id("capture_window", "Capture Window  (Ctrl+Alt+Shift+W)")
+    &MenuItemBuilder::with_id("capture_window", &window_label)
       .build(app)?,
   );
   builder = builder.item(
-    &MenuItemBuilder::with_id("capture_fullscreen", "Capture Fullscreen  (Ctrl+Alt+Shift+D)")
+    &MenuItemBuilder::with_id("capture_fullscreen", &fullscreen_label)
       .build(app)?,
   );
 
@@ -101,12 +111,13 @@ pub fn build_tray_menu(
 }
 
 pub fn refresh_tray_menu(app: &AppHandle) {
-  let history = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.capture_history.clone()
+  let (history, config) = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    let history: Vec<PathBuf> = state.capture_history.iter().cloned().collect();
+    (history, state.config.clone())
   };
-  if let Ok(menu) = build_tray_menu(app, &history) {
+  if let Ok(menu) = build_tray_menu(app, &history, &config) {
     if let Some(tray) = app.tray_by_id("main") {
       tray.set_menu(Some(menu)).ok();
     }

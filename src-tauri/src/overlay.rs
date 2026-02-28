@@ -3,25 +3,17 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::capture;
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{AppState, LockRecover};
 
 pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
-  let mode = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.capture_mode.clone()
-  };
+  let mode = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_mode.clone();
   open_overlay_with_mode(app, &mode)
 }
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
   // Check if already capturing
-  {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    if state.is_capturing {
-      return Ok(());
-    }
+  if app.state::<Mutex<AppState>>().lock_or_recover().is_capturing {
+    return Ok(());
   }
 
   // Get virtual desktop bounds (fast, no image capture)
@@ -34,23 +26,21 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     let screen = capture::capture_all_monitors()?;
     let base64_data = capture::image_to_base64(&screen.image)?;
 
-    {
-      let state = app.state::<Mutex<AppState>>();
-      let mut state = state.lock().unwrap();
-      state.is_capturing = true;
-      state.overlay_mode = mode.to_string();
-      state.pending_screenshot = Some(screen.image);
-      state.pending_base64 = Some(base64_data);
-    }
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_capturing = true;
+    state.overlay_mode = mode.to_string();
+    state.pending_screenshot = Some(screen.image);
+    state.pending_base64 = Some(base64_data);
   } else {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.is_capturing = true;
     state.overlay_mode = mode.to_string();
   }
 
   // Span overlay across the entire virtual desktop (all monitors)
-  let _overlay = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
+  let build_result = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
     .title("QuickShotter Overlay")
     .transparent(true)
     .decorations(false)
@@ -59,20 +49,26 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     .inner_size(bounds.width as f64, bounds.height as f64)
     .visible(false)
     .skip_taskbar(true)
-    .build()?;
+    .build();
+
+  if let Err(e) = build_result {
+    // Reset state so future captures aren't permanently blocked
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_capturing = false;
+    state.pending_screenshot = None;
+    state.pending_base64 = None;
+    return Err(e.into());
+  }
 
   // Find overlay's xcap window ID for window detection exclusion
-  {
-    let overlay_id = xcap::Window::all()
-      .unwrap_or_default()
-      .iter()
-      .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
-      .and_then(|w| w.id().ok())
-      .unwrap_or(0);
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
-    state.overlay_window_id = overlay_id;
-  }
+  let overlay_id = xcap::Window::all()
+    .unwrap_or_default()
+    .iter()
+    .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
+    .and_then(|w| w.id().ok())
+    .unwrap_or(0);
+  app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id = overlay_id;
 
   Ok(())
 }
@@ -81,8 +77,8 @@ pub fn close_overlay(app: &AppHandle) {
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.destroy().ok();
   }
-  let state = app.state::<Mutex<AppState>>();
-  let mut state = state.lock().unwrap();
+  let s = app.state::<Mutex<AppState>>();
+  let mut state = s.lock_or_recover();
   state.is_capturing = false;
   state.pending_screenshot = None;
   state.pending_base64 = None;
@@ -105,8 +101,8 @@ pub fn close_annotation_window(app: &AppHandle) {
   if let Some(win) = app.get_webview_window("annotation") {
     win.destroy().ok();
   }
-  let state = app.state::<Mutex<AppState>>();
-  let mut state = state.lock().unwrap();
+  let s = app.state::<Mutex<AppState>>();
+  let mut state = s.lock_or_recover();
   state.pending_annotation = None;
   state.pending_annotation_base64 = None;
 }

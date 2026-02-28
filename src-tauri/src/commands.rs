@@ -7,7 +7,7 @@ use crate::config;
 use crate::error::AppError;
 use crate::hotkeys;
 use crate::overlay;
-use crate::state::AppState;
+use crate::state::{AppState, LockRecover};
 use crate::tray;
 use crate::window_capture;
 
@@ -28,17 +28,13 @@ pub struct AnnotationConfigDto {
 /// Returns "instant", "freeze", or "window" so the overlay JS knows which mode.
 #[tauri::command]
 pub fn get_overlay_mode(app: AppHandle) -> String {
-  let state = app.state::<Mutex<AppState>>();
-  let state = state.lock().unwrap();
-  state.overlay_mode.clone()
+  app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone()
 }
 
 /// In freeze/window mode, the overlay pulls the pre-captured screenshot.
 #[tauri::command]
 pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
-  let state = app.state::<Mutex<AppState>>();
-  let state = state.lock().unwrap();
-  state
+  app.state::<Mutex<AppState>>().lock_or_recover()
     .pending_base64
     .clone()
     .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
@@ -64,11 +60,7 @@ pub fn trigger_window_capture(app: AppHandle) -> Result<(), AppError> {
 pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
   let screen = capture::capture_all_monitors()?;
 
-  let annotate = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.annotate_captures
-  };
+  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
     return open_annotation_for_image(app, screen.image).await;
@@ -76,18 +68,14 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
 
   capture::copy_to_clipboard(&screen.image)?;
 
-  let config = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.clone()
-  };
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
 
   let saved = capture::save_to_disk(&screen.image, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
   }
@@ -128,15 +116,11 @@ pub async fn complete_region_capture(
   }
 
   // Check which mode we're in
-  let mode = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.overlay_mode.clone()
-  };
+  let mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
 
   let image = if mode == "freeze" || mode == "window" {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
     let screenshot = state
       .pending_screenshot
       .as_ref()
@@ -153,11 +137,7 @@ pub async fn complete_region_capture(
   tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
 
   // Check if we should open annotation editor
-  let annotate = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.annotate_captures
-  };
+  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
     return open_annotation_for_image(&app, image).await;
@@ -165,18 +145,14 @@ pub async fn complete_region_capture(
 
   capture::copy_to_clipboard(&image)?;
 
-  let config = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.clone()
-  };
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
 
   let saved = capture::save_to_disk(&image, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
   }
@@ -194,11 +170,7 @@ pub async fn complete_region_capture(
 
 #[tauri::command]
 pub fn get_window_at_cursor(app: AppHandle) -> Option<window_capture::WindowRect> {
-  let exclude_id = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.overlay_window_id
-  };
+  let exclude_id = app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id;
   let (cx, cy) = window_capture::get_cursor_pos();
   window_capture::get_window_rect_at(cx, cy, exclude_id)
 }
@@ -216,6 +188,12 @@ pub async fn complete_window_capture(
     overlay.hide().ok();
   }
 
+  if right <= left || bottom <= top {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+    return Err(AppError::Capture("Invalid window bounds".to_string()));
+  }
+
   let w = (right - left) as u32;
   let h = (bottom - top) as u32;
 
@@ -230,12 +208,12 @@ pub async fn complete_window_capture(
   let origin_x = bounds.x;
   let origin_y = bounds.y;
 
-  let crop_x = (left - origin_x) as u32;
-  let crop_y = (top - origin_y) as u32;
+  let crop_x = (left - origin_x).max(0) as u32;
+  let crop_y = (top - origin_y).max(0) as u32;
 
   let image = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
     let screenshot = state
       .pending_screenshot
       .as_ref()
@@ -248,11 +226,7 @@ pub async fn complete_window_capture(
   tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
 
   // Check if we should open annotation editor
-  let annotate = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.annotate_captures
-  };
+  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
     return open_annotation_for_image(&app, image).await;
@@ -260,18 +234,14 @@ pub async fn complete_window_capture(
 
   capture::copy_to_clipboard(&image)?;
 
-  let config = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.clone()
-  };
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
 
   let saved = capture::save_to_disk(&image, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
   }
@@ -295,8 +265,8 @@ async fn open_annotation_for_image(
   let base64 = capture::image_to_base64_png(&image)?;
 
   {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.pending_annotation = Some(image);
     state.pending_annotation_base64 = Some(base64);
   }
@@ -313,9 +283,7 @@ async fn open_annotation_for_image(
 /// Annotation editor: fetch the pending image as base64 PNG.
 #[tauri::command]
 pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
-  let state = app.state::<Mutex<AppState>>();
-  let state = state.lock().unwrap();
-  state
+  app.state::<Mutex<AppState>>().lock_or_recover()
     .pending_annotation_base64
     .clone()
     .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))
@@ -324,8 +292,8 @@ pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
 /// Annotation editor: fetch modifier-to-tool config.
 #[tauri::command]
 pub fn get_annotation_config(app: AppHandle) -> AnnotationConfigDto {
-  let state = app.state::<Mutex<AppState>>();
-  let state = state.lock().unwrap();
+  let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
   AnnotationConfigDto {
     shift_tool: state.config.annotate_shift_tool.clone(),
     ctrl_tool: state.config.annotate_ctrl_tool.clone(),
@@ -354,18 +322,14 @@ pub async fn save_annotated_capture(
 
   capture::copy_to_clipboard(&img)?;
 
-  let config = {
-    let state = app.state::<Mutex<AppState>>();
-    let state = state.lock().unwrap();
-    state.config.clone()
-  };
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
 
   let saved = capture::save_to_disk(&img, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
   if let Some(ref path) = saved {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
   }
@@ -407,9 +371,7 @@ pub async fn cancel_capture(app: AppHandle) -> Result<(), AppError> {
 
 #[tauri::command]
 pub fn get_config(app: AppHandle) -> crate::config::AppConfig {
-  let state = app.state::<Mutex<AppState>>();
-  let state = state.lock().unwrap();
-  state.config.clone()
+  app.state::<Mutex<AppState>>().lock_or_recover().config.clone()
 }
 
 #[tauri::command]
@@ -420,15 +382,12 @@ pub async fn save_config(
   let folder = std::path::PathBuf::from(&new_config.save_folder);
   std::fs::create_dir_all(&folder)?;
 
-  {
-    let state = app.state::<Mutex<AppState>>();
-    let mut state = state.lock().unwrap();
-    state.config = new_config.clone();
-  }
+  app.state::<Mutex<AppState>>().lock_or_recover().config = new_config.clone();
   config::save_config(&app, &new_config)?;
 
   hotkeys::reload_hotkeys(&app).map_err(|e| AppError::Config(e.to_string()))?;
   crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
+  tray::refresh_tray_menu(&app);
 
   Ok(())
 }
