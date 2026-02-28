@@ -1,3 +1,4 @@
+use image::RgbaImage;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -125,11 +126,11 @@ pub async fn complete_region_capture(
       .pending_screenshot
       .as_ref()
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
-    image::imageops::crop_imm(screenshot, left, top, w, h).to_image()
+    safe_crop(screenshot, left, top, w, h)?
   } else {
     std::thread::sleep(std::time::Duration::from_millis(50));
     let screen = capture::capture_all_monitors()?;
-    image::imageops::crop_imm(&screen.image, left, top, w, h).to_image()
+    safe_crop(&screen.image, left, top, w, h)?
   };
 
   // Defer overlay destroy
@@ -218,7 +219,7 @@ pub async fn complete_window_capture(
       .pending_screenshot
       .as_ref()
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
-    image::imageops::crop_imm(screenshot, crop_x, crop_y, w, h).to_image()
+    safe_crop(screenshot, crop_x, crop_y, w, h)?
   };
 
   // Defer overlay destroy
@@ -293,7 +294,7 @@ pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
 #[tauri::command]
 pub fn get_annotation_config(app: AppHandle) -> AnnotationConfigDto {
   let s = app.state::<Mutex<AppState>>();
-    let state = s.lock_or_recover();
+  let state = s.lock_or_recover();
   AnnotationConfigDto {
     shift_tool: state.config.annotate_shift_tool.clone(),
     ctrl_tool: state.config.annotate_ctrl_tool.clone(),
@@ -309,6 +310,12 @@ pub async fn save_annotated_capture(
   app: AppHandle,
   image_base64: String,
 ) -> Result<CaptureResultDto, AppError> {
+  // Limit decoded size to prevent OOM from crafted input (~100MB decoded)
+  const MAX_BASE64_LEN: usize = 134_000_000;
+  if image_base64.len() > MAX_BASE64_LEN {
+    return Err(AppError::Annotation("Image data too large".to_string()));
+  }
+
   // Decode base64 PNG to RgbaImage
   let png_bytes = base64::Engine::decode(
     &base64::engine::general_purpose::STANDARD,
@@ -382,6 +389,13 @@ pub async fn save_config(
   let folder = std::path::PathBuf::from(&new_config.save_folder);
   std::fs::create_dir_all(&folder)?;
 
+  // Validate filename_suffix as a chrono format string
+  let has_bad_format = chrono::format::strftime::StrftimeItems::new(&new_config.filename_suffix)
+    .any(|item| matches!(item, chrono::format::Item::Error));
+  if has_bad_format {
+    return Err(AppError::Config("Invalid date format in filename suffix".to_string()));
+  }
+
   app.state::<Mutex<AppState>>().lock_or_recover().config = new_config.clone();
   config::save_config(&app, &new_config)?;
 
@@ -431,6 +445,20 @@ pub fn validate_save_folder(folder: String) -> String {
 }
 
 // -- Utility --
+
+/// Crop with bounds clamping to prevent panics from out-of-range coordinates.
+fn safe_crop(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> Result<RgbaImage, AppError> {
+  let iw = img.width();
+  let ih = img.height();
+  let x = x.min(iw.saturating_sub(1));
+  let y = y.min(ih.saturating_sub(1));
+  let w = w.min(iw.saturating_sub(x));
+  let h = h.min(ih.saturating_sub(y));
+  if w == 0 || h == 0 {
+    return Err(AppError::Capture("Crop region outside image bounds".to_string()));
+  }
+  Ok(image::imageops::crop_imm(img, x, y, w, h).to_image())
+}
 
 pub fn show_settings_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("settings") {

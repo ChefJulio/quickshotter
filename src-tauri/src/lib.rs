@@ -49,6 +49,13 @@ pub fn run() {
       tray::setup_tray(&app.handle())?;
       if let Err(e) = hotkeys::register_hotkeys(&app.handle()) {
         eprintln!("Failed to register hotkeys: {e}");
+        use tauri_plugin_notification::NotificationExt;
+        app.handle().notification()
+          .builder()
+          .title("QuickShotter")
+          .body(&format!("Failed to register hotkeys: {}", e))
+          .show()
+          .ok();
       }
 
       Ok(())

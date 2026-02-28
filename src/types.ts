@@ -6,7 +6,7 @@ export interface AppConfig {
   format: 'jpg' | 'png' | 'webp';
   filename_prefix: string;
   save_to_disk: boolean;
-  capture_mode: 'instant' | 'freeze';
+  capture_mode: 'instant' | 'freeze' | 'window';
   annotate_captures: boolean;
   annotate_shift_tool: string;
   annotate_ctrl_tool: string;

@@ -4,7 +4,10 @@
 /// topmost visible, non-minimized window at a given screen coordinate.
 /// Uses mouse_position crate for cross-platform cursor position.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use xcap::Window;
+
+static WINDOW_QUERY_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WindowRect {
@@ -26,6 +29,29 @@ pub fn get_cursor_pos() -> (i32, i32) {
 }
 
 pub fn get_window_rect_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {
+  // Skip if a previous query is still running (timed out)
+  if WINDOW_QUERY_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    return None;
+  }
+
+  let (tx, rx) = std::sync::mpsc::channel();
+  std::thread::spawn(move || {
+    let result = find_window_at(x, y, exclude_id);
+    tx.send(result).ok();
+    WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
+  });
+
+  match rx.recv_timeout(std::time::Duration::from_millis(500)) {
+    Ok(result) => result,
+    Err(_) => {
+      // Thread will reset WINDOW_QUERY_ACTIVE when it completes
+      eprintln!("window_capture: Window::all() timed out");
+      None
+    }
+  }
+}
+
+fn find_window_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {
   let windows = match Window::all() {
     Ok(w) => w,
     Err(e) => {

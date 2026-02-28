@@ -104,6 +104,16 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
 
   let total_w = (max_x - min_x) as u32;
   let total_h = (max_y - min_y) as u32;
+
+  // Guard against unreasonable allocations from multi-monitor setups
+  const MAX_PIXELS: u64 = 64_000_000; // ~256MB for RGBA
+  if (total_w as u64) * (total_h as u64) > MAX_PIXELS {
+    return Err(AppError::Capture(format!(
+      "Virtual desktop too large to capture ({}x{})",
+      total_w, total_h
+    )));
+  }
+
   let mut canvas: RgbaImage = ImageBuffer::new(total_w, total_h);
 
   for m in &monitors {
@@ -161,6 +171,12 @@ pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), AppError> {
   Ok(())
 }
 
+/// Strip path-significant and Windows-reserved characters from filename parts.
+fn sanitize_filename_part(s: &str) -> String {
+  s.replace(['/', '\\', ':', '<', '>', '|', '"', '?', '*', '\0'], "_")
+    .replace("..", "_")
+}
+
 /// Save an image to disk based on config. Returns the filepath if saved.
 pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
   if !config.save_to_disk {
@@ -172,10 +188,24 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
 
   let ext = &config.format;
   // Sanitize prefix and suffix to prevent path traversal
-  let safe_prefix = config.filename_prefix.replace(['/', '\\'], "_").replace("..", "_");
-  let safe_suffix = config.filename_suffix.replace(['/', '\\'], "_").replace("..", "_");
-  let timestamp = chrono::Local::now().format(&safe_suffix);
+  let safe_prefix = sanitize_filename_part(&config.filename_prefix);
+  let safe_suffix = sanitize_filename_part(&config.filename_suffix);
+  // Validate chrono format string; fall back to default if invalid
+  let timestamp = {
+    let has_error = chrono::format::strftime::StrftimeItems::new(&safe_suffix)
+      .any(|item| matches!(item, chrono::format::Item::Error));
+    if has_error {
+      chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string()
+    } else {
+      chrono::Local::now().format(&safe_suffix).to_string()
+    }
+  };
   let base_name = format!("{}_{}", safe_prefix, timestamp);
+  // Final safety net: strip any remaining directory components
+  let base_name = std::path::Path::new(&base_name)
+    .file_name()
+    .map(|n| n.to_string_lossy().to_string())
+    .unwrap_or_else(|| format!("screenshot_{}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
   let mut filepath = folder.join(format!("{}.{}", base_name, ext));
 
   // Collision avoidance: append _2, _3, etc. if file exists

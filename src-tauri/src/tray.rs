@@ -119,7 +119,9 @@ pub fn refresh_tray_menu(app: &AppHandle) {
   };
   if let Ok(menu) = build_tray_menu(app, &history, &config) {
     if let Some(tray) = app.tray_by_id("main") {
-      tray.set_menu(Some(menu)).ok();
+      if let Err(e) = tray.set_menu(Some(menu)) {
+        eprintln!("Failed to update tray menu: {e}");
+      }
     }
   }
 }
@@ -130,6 +132,7 @@ fn open_in_explorer(path: &PathBuf) {
     std::process::Command::new("explorer")
       .args(["/select,", &path.to_string_lossy()])
       .spawn()
+      .map_err(|e| eprintln!("Failed to open explorer: {e}"))
       .ok();
   }
   #[cfg(target_os = "macos")]
@@ -137,6 +140,7 @@ fn open_in_explorer(path: &PathBuf) {
     std::process::Command::new("open")
       .args(["-R", &path.to_string_lossy()])
       .spawn()
+      .map_err(|e| eprintln!("Failed to open Finder: {e}"))
       .ok();
   }
   #[cfg(target_os = "linux")]
@@ -145,6 +149,7 @@ fn open_in_explorer(path: &PathBuf) {
       std::process::Command::new("xdg-open")
         .arg(parent)
         .spawn()
+        .map_err(|e| eprintln!("Failed to open file manager: {e}"))
         .ok();
     }
   }

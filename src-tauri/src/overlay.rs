@@ -61,13 +61,22 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     return Err(e.into());
   }
 
-  // Find overlay's xcap window ID for window detection exclusion
-  let overlay_id = xcap::Window::all()
-    .unwrap_or_default()
-    .iter()
-    .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
-    .and_then(|w| w.id().ok())
-    .unwrap_or(0);
+  // Find overlay's xcap window ID for window detection exclusion.
+  // Retry because the window may not be visible to xcap immediately after build.
+  let mut overlay_id = 0u32;
+  for _ in 0..3 {
+    overlay_id = xcap::Window::all()
+      .unwrap_or_default()
+      .iter()
+      .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
+      .and_then(|w| w.id().ok())
+      .unwrap_or(0);
+    if overlay_id != 0 { break; }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+  }
+  if overlay_id == 0 {
+    eprintln!("Could not find overlay window ID for exclusion");
+  }
   app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id = overlay_id;
 
   Ok(())
@@ -75,7 +84,9 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
 pub fn close_overlay(app: &AppHandle) {
   if let Some(overlay) = app.get_webview_window("overlay") {
-    overlay.destroy().ok();
+    if let Err(e) = overlay.destroy() {
+      eprintln!("Failed to destroy overlay window: {e}");
+    }
   }
   let s = app.state::<Mutex<AppState>>();
   let mut state = s.lock_or_recover();
@@ -99,7 +110,9 @@ pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
 
 pub fn close_annotation_window(app: &AppHandle) {
   if let Some(win) = app.get_webview_window("annotation") {
-    win.destroy().ok();
+    if let Err(e) = win.destroy() {
+      eprintln!("Failed to destroy annotation window: {e}");
+    }
   }
   let s = app.state::<Mutex<AppState>>();
   let mut state = s.lock_or_recover();

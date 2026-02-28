@@ -47,6 +47,7 @@ interface TextAnnotation {
 type Annotation = FreehandAnnotation | ArrowAnnotation | OvalAnnotation | RectAnnotation | TextAnnotation;
 
 const MIN_DRAG_SIZE = 3;
+const MAX_UNDO = 100;
 
 // -- State --
 
@@ -459,6 +460,7 @@ function onMouseUp(e: MouseEvent) {
 
   if (!discard) {
     undoStack.push(currentAnnotation);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
     redoStack.length = 0;
     updateUndoRedoButtons();
   }
@@ -503,6 +505,7 @@ function confirmTextInput() {
       fontSize: activeFontSize,
     };
     undoStack.push(ann);
+    if (undoStack.length > MAX_UNDO) undoStack.shift();
     redoStack.length = 0;
     updateUndoRedoButtons();
     render();
@@ -535,6 +538,7 @@ function redo() {
   if (isDrawing || redoStack.length === 0) return;
   const ann = redoStack.pop()!;
   undoStack.push(ann);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
   updateUndoRedoButtons();
   render();
 }
