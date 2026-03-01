@@ -45,7 +45,8 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       }
     };
 
-    // Detect likely permission denial (black screenshot) on macOS
+    // Detect likely permission denial (black screenshot) on macOS.
+    // Abort early -- continuing would show a useless black overlay.
     #[cfg(target_os = "macos")]
     if capture::is_likely_blank(&screen.image) {
       use tauri_plugin_notification::NotificationExt;
@@ -55,6 +56,8 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
         .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
         .show()
         .ok();
+      app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+      return Ok(());
     }
 
     let base64_data = match capture::image_to_base64(&screen.image) {
@@ -77,6 +80,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     .transparent(true)
     .decorations(false)
     .always_on_top(true)
+    .resizable(false)
     .position(bounds.x as f64, bounds.y as f64)
     .inner_size(bounds.width as f64, bounds.height as f64)
     .visible(false)
@@ -136,6 +140,7 @@ pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
     .title("QuickShotter - Annotate")
     .decorations(false)
     .always_on_top(true)
+    .resizable(false)
     .position(bounds.x as f64, bounds.y as f64)
     .inner_size(bounds.width as f64, bounds.height as f64)
     .visible(false)

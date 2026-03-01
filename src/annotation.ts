@@ -328,11 +328,13 @@ function textBoundingRect(ann: TextAnnotation): { x: number; y: number; w: numbe
   ctx.font = `${ann.fontSize}px sans-serif`;
   const metrics = ctx.measureText(ann.text);
   ctx.restore();
+  const ascent = metrics.actualBoundingBoxAscent ?? ann.fontSize * 0.8;
+  const descent = metrics.actualBoundingBoxDescent ?? ann.fontSize * 0.2;
   return {
     x: ann.position.x,
-    y: ann.position.y - ann.fontSize * 0.8,
+    y: ann.position.y - ascent,
     w: metrics.width,
-    h: ann.fontSize * 1.2,
+    h: ascent + descent,
   };
 }
 

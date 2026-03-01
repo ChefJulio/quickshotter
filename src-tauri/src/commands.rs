@@ -141,6 +141,28 @@ pub async fn complete_region_capture(
   x2: u32,
   y2: u32,
 ) -> Result<CaptureResultDto, AppError> {
+  // Hide overlay immediately (don't destroy -- we're still inside its webview command)
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+
+  let result = complete_region_capture_inner(&app, x1, y1, x2, y2).await;
+
+  // Always close overlay to avoid leaking the window.
+  // Safe to call even if inner function already closed it (idempotent).
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+
+  result
+}
+
+async fn complete_region_capture_inner(
+  app: &AppHandle,
+  x1: u32,
+  y1: u32,
+  x2: u32,
+  y2: u32,
+) -> Result<CaptureResultDto, AppError> {
   let left = x1.min(x2);
   let top = y1.min(y2);
   let right = x1.max(x2);
@@ -148,14 +170,7 @@ pub async fn complete_region_capture(
   let w = right - left;
   let h = bottom - top;
 
-  // Hide overlay immediately (don't destroy -- we're still inside its webview command)
-  if let Some(overlay) = app.get_webview_window("overlay") {
-    overlay.hide().ok();
-  }
-
   if w < 3 || h < 3 {
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
     return Err(AppError::Capture("Selection too small".to_string()));
   }
 
@@ -176,29 +191,18 @@ pub async fn complete_region_capture(
     let _ = tauri::async_runtime::spawn_blocking(|| {
       std::thread::sleep(std::time::Duration::from_millis(150));
     }).await;
-    match capture::capture_all_monitors() {
-      Ok(screen) => safe_crop(&screen.image, left, top, w, h)?,
-      Err(e) => {
-        // Close overlay even on capture failure to avoid leaking the window
-        let app2 = app.clone();
-        tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
-        return Err(e);
-      }
-    }
+    let screen = capture::capture_all_monitors()?;
+    safe_crop(&screen.image, left, top, w, h)?
   };
-
-  // Defer overlay destroy
-  let app2 = app.clone();
-  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
 
   // Check if we should open annotation editor
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
-    return open_annotation_for_image(&app, image).await;
+    return open_annotation_for_image(app, image).await;
   }
 
-  finalize_capture(&app, &image)
+  finalize_capture(app, &image)
 }
 
 // -- Window capture commands --
@@ -223,9 +227,24 @@ pub async fn complete_window_capture(
     overlay.hide().ok();
   }
 
+  let result = complete_window_capture_inner(&app, left, top, right, bottom).await;
+
+  // Always close overlay to avoid leaking the window.
+  // Safe to call even if already closed (idempotent).
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+
+  result
+}
+
+async fn complete_window_capture_inner(
+  app: &AppHandle,
+  left: i32,
+  top: i32,
+  right: i32,
+  bottom: i32,
+) -> Result<CaptureResultDto, AppError> {
   if right <= left || bottom <= top {
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
     return Err(AppError::Capture("Invalid window bounds".to_string()));
   }
 
@@ -233,8 +252,6 @@ pub async fn complete_window_capture(
   let h = (bottom - top) as u32;
 
   if w < 3 || h < 3 {
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
     return Err(AppError::Capture("Window too small".to_string()));
   }
 
@@ -256,18 +273,14 @@ pub async fn complete_window_capture(
     safe_crop(screenshot, crop_x, crop_y, w, h)?
   };
 
-  // Defer overlay destroy
-  let app2 = app.clone();
-  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
-
   // Check if we should open annotation editor
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
-    return open_annotation_for_image(&app, image).await;
+    return open_annotation_for_image(app, image).await;
   }
 
-  finalize_capture(&app, &image)
+  finalize_capture(app, &image)
 }
 
 // -- Annotation commands --
@@ -288,7 +301,15 @@ async fn open_annotation_for_image(
     state.is_annotating = true;
   }
 
-  overlay::open_annotation_window(app)?;
+  if let Err(e) = overlay::open_annotation_window(app) {
+    // Reset annotation state so future captures aren't permanently blocked
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_annotating = false;
+    state.pending_annotation = None;
+    state.pending_annotation_base64 = None;
+    return Err(e);
+  }
 
   // Return a placeholder -- the actual save happens from the annotation editor
   Ok(CaptureResultDto {
