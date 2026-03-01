@@ -11,6 +11,7 @@ pub struct AppState {
   pub config: AppConfig,
   pub capture_history: VecDeque<PathBuf>,
   pub is_capturing: bool,
+  pub is_annotating: bool,
   // Only used in "freeze" / "window" capture modes
   pub pending_screenshot: Option<RgbaImage>,
   pub pending_base64: Option<String>,
@@ -31,6 +32,7 @@ impl AppState {
       config,
       capture_history: VecDeque::new(),
       is_capturing: false,
+      is_annotating: false,
       pending_screenshot: None,
       pending_base64: None,
       last_saved_path: None,

@@ -80,6 +80,7 @@ let textInputImagePos: Point | null = null;
 // Text dragging state
 let draggingTextIdx: number | null = null;
 let textDragOffset: Point = { x: 0, y: 0 };
+let textDragOriginalPos: Point | null = null; // for undo
 
 // Toolbar dragging
 let toolbarDragPos: { x: number; y: number } | null = null;
@@ -377,6 +378,7 @@ function onMouseDown(e: MouseEvent) {
       const ann = undoStack[hitIdx] as TextAnnotation;
       draggingTextIdx = hitIdx;
       textDragOffset = { x: ann.position.x - pos.x, y: ann.position.y - pos.y };
+      textDragOriginalPos = { ...ann.position };
       isDrawing = true;
       return;
     }
@@ -434,9 +436,21 @@ function onMouseMove(e: MouseEvent) {
 function onMouseUp(e: MouseEvent) {
   if (e.button !== 0) return;
 
-  // Finish text drag
+  // Finish text drag. Position was mutated in-place during onMouseMove.
+  // The flat undo stack model doesn't support undoing in-place edits, so
+  // we just clear redo to prevent inconsistency from stale redo entries.
   if (draggingTextIdx !== null) {
+    if (textDragOriginalPos) {
+      const ann = undoStack[draggingTextIdx] as TextAnnotation;
+      const dx = ann.position.x - textDragOriginalPos.x;
+      const dy = ann.position.y - textDragOriginalPos.y;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        redoStack.length = 0;
+        updateUndoRedoButtons();
+      }
+    }
     draggingTextIdx = null;
+    textDragOriginalPos = null;
     isDrawing = false;
     render();
     return;
@@ -550,7 +564,11 @@ function updateUndoRedoButtons() {
 
 // -- Save / Cancel --
 
-function compositeAndSave() {
+let saving = false;
+
+async function compositeAndSave() {
+  if (saving) return;
+  saving = true;
   // Create offscreen canvas at original image dimensions
   const offscreen = document.createElement('canvas');
   offscreen.width = sourceImage.naturalWidth;
@@ -569,7 +587,12 @@ function compositeAndSave() {
   const dataUrl = offscreen.toDataURL('image/png');
   const base64 = dataUrl.split(',')[1];
 
-  invoke('save_annotated_capture', { imageBase64: base64 });
+  try {
+    await invoke('save_annotated_capture', { imageBase64: base64 });
+  } catch (e) {
+    console.error('Save failed:', e);
+    saving = false;
+  }
 }
 
 function cancelAnnotation() {

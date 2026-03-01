@@ -50,11 +50,11 @@ pub struct WindowRect {
 /// Cross-platform window identifier (u32 from xcap).
 pub type WindowId = u32;
 
-pub fn get_cursor_pos() -> (i32, i32) {
+pub fn get_cursor_pos() -> Option<(i32, i32)> {
   use mouse_position::mouse_position::Mouse;
   match Mouse::get_mouse_position() {
-    Mouse::Position { x, y } => (x, y),
-    Mouse::Error => (0, 0),
+    Mouse::Position { x, y } => Some((x, y)),
+    Mouse::Error => None,
   }
 }
 

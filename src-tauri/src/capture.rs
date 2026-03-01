@@ -270,30 +270,34 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
     .unwrap_or_else(|| format!("screenshot_{}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
   let mut filepath = folder.join(format!("{}.{}", base_name, ext));
 
-  // Collision avoidance: append _2, _3, etc. if file exists
+  // Collision avoidance: append _2, _3, etc. if file exists (bounded)
   let mut counter = 2u32;
-  while filepath.exists() {
+  while filepath.exists() && counter < 10_000 {
     filepath = folder.join(format!("{}_{}.{}", base_name, counter, ext));
     counter += 1;
   }
 
   match ext.as_str() {
     "jpg" | "jpeg" => {
+      // Stream JPEG directly to file via BufWriter -- avoids buffering the
+      // entire encoded image in memory before writing.
       let rgb = rgba_to_rgb(img)?;
-      let mut buf = Cursor::new(Vec::new());
-      let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85);
+      let file = std::fs::File::create(&filepath)?;
+      let mut writer = std::io::BufWriter::new(file);
+      let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 85);
       encoder
         .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
         .map_err(|e| AppError::Capture(e.to_string()))?;
-      std::fs::write(&filepath, buf.into_inner())?;
     }
     "webp" => {
-      let rgba = image::DynamicImage::ImageRgba8(img.clone());
-      let mut buf = Cursor::new(Vec::new());
-      rgba
-        .write_to(&mut buf, image::ImageFormat::WebP)
+      // Encode directly from raw RGBA bytes -- avoids cloning the entire
+      // image into a DynamicImage wrapper and the intermediate Vec<u8> buffer.
+      let file = std::fs::File::create(&filepath)?;
+      let mut writer = std::io::BufWriter::new(file);
+      let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut writer);
+      encoder
+        .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
         .map_err(|e| AppError::Capture(e.to_string()))?;
-      std::fs::write(&filepath, buf.into_inner())?;
     }
     _ => {
       // PNG (default)

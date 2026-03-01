@@ -12,11 +12,12 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
   // Atomically check and set is_capturing in a single lock scope
-  // to prevent two rapid hotkey presses from opening duplicate overlays.
+  // to prevent two rapid hotkey presses from opening duplicate overlays,
+  // and block captures while the annotation editor is open.
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    if state.is_capturing {
+    if state.is_capturing || state.is_annotating {
       return Ok(());
     }
     state.is_capturing = true;
@@ -153,4 +154,5 @@ pub fn close_annotation_window(app: &AppHandle) {
   let mut state = s.lock_or_recover();
   state.pending_annotation = None;
   state.pending_annotation_base64 = None;
+  state.is_annotating = false;
 }

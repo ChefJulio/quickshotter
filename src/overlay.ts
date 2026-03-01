@@ -36,14 +36,15 @@ let windowPollPending = false;
 
 function initCanvas() {
   canvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
-  ctx = canvas.getContext('2d')!;
+  // Hint browser to use GPU-backed canvas -- we never call getImageData
+  ctx = canvas.getContext('2d', { willReadFrequently: false })!;
   // Canvas buffer at CSS pixel resolution; all drawing uses CSS coords
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 
   // Pre-create dimmed canvas (used in freeze/window mode)
   dimmedCanvas = document.createElement('canvas');
-  dimmedCtx = dimmedCanvas.getContext('2d')!;
+  dimmedCtx = dimmedCanvas.getContext('2d', { willReadFrequently: false })!;
 
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
@@ -264,10 +265,12 @@ function onKeyDown(e: KeyboardEvent) {
 function cancel() {
   if (cancelled) return;
   cancelled = true;
+  isDragging = false;
   invoke('cancel_capture');
 }
 
 function captureFullscreen() {
+  if (cancelled) return;
   // Send physical pixel dimensions to Rust
   invoke('complete_region_capture', {
     x1: 0,

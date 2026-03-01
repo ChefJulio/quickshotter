@@ -228,7 +228,12 @@ window.addEventListener('DOMContentLoaded', () => {
   fullscreenHotkey = initHotkeyRecorder(fullscreenHotkeyInput, '');
   windowHotkey = initHotkeyRecorder(windowHotkeyInput, '');
 
-  // Folder validation on manual edit
+  // Folder validation on edit -- debounced to avoid excessive IPC calls while typing
+  let folderValidateTimer: ReturnType<typeof setTimeout>;
+  folderInput.addEventListener('input', () => {
+    clearTimeout(folderValidateTimer);
+    folderValidateTimer = setTimeout(validateFolder, 300);
+  });
   folderInput.addEventListener('change', validateFolder);
 
   document.getElementById('browse-btn')!.addEventListener('click', browseSaveFolder);

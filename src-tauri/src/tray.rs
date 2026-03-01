@@ -135,8 +135,9 @@ pub fn refresh_tray_menu(app: &AppHandle) {
 fn open_in_explorer(path: &PathBuf) {
   #[cfg(target_os = "windows")]
   {
+    // /select, and quoted path to handle spaces and commas correctly
     std::process::Command::new("explorer")
-      .args(["/select,", &path.to_string_lossy()])
+      .arg(format!("/select,\"{}\"", path.display()))
       .spawn()
       .map_err(|e| eprintln!("Failed to open explorer: {e}"))
       .ok();

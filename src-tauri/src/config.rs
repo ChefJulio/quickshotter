@@ -120,6 +120,11 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), AppError> 
   let path = config_path(app);
   let content = serde_json::to_string_pretty(config)
     .map_err(|e| AppError::Config(e.to_string()))?;
-  fs::write(&path, content + "\n")?;
+
+  // Atomic write: write to a temp file in the same directory, then rename.
+  // This prevents corruption if the process crashes mid-write.
+  let tmp_path = path.with_extension("json.tmp");
+  fs::write(&tmp_path, content + "\n")?;
+  fs::rename(&tmp_path, &path)?;
   Ok(())
 }

@@ -33,12 +33,43 @@ pub fn get_overlay_mode(app: AppHandle) -> String {
 }
 
 /// In freeze/window mode, the overlay pulls the pre-captured screenshot.
+/// Takes ownership of the base64 data (drops it from state) to free memory
+/// since the overlay only needs it once.
 #[tauri::command]
 pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
   app.state::<Mutex<AppState>>().lock_or_recover()
     .pending_base64
-    .clone()
+    .take()
     .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
+}
+
+// -- Shared capture finalization --
+
+/// Copy image to clipboard, save to disk, update history, refresh tray, and
+/// send a desktop notification.  Called from every capture path to avoid
+/// duplicating this pipeline.
+fn finalize_capture(app: &AppHandle, img: &RgbaImage) -> Result<CaptureResultDto, AppError> {
+  capture::copy_to_clipboard(img)?;
+
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+
+  let saved = capture::save_to_disk(img, &config)?;
+  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
+
+  if let Some(ref path) = saved {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.add_to_history(path.clone());
+    state.last_saved_path = Some(path.clone());
+  }
+
+  tray::refresh_tray_menu(app);
+  notify_capture(app, filepath_str.as_deref());
+
+  Ok(CaptureResultDto {
+    filepath: filepath_str,
+    copied_to_clipboard: true,
+  })
 }
 
 // -- Capture commands --
@@ -59,6 +90,25 @@ pub fn trigger_window_capture(app: AppHandle) -> Result<(), AppError> {
 }
 
 pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
+  // Guard against duplicate captures and concurrent annotation
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    if state.is_capturing || state.is_annotating {
+      return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
+    }
+    state.is_capturing = true;
+  }
+
+  let result = do_fullscreen_capture_inner(app).await;
+
+  // Always reset is_capturing, even on error (annotation sets its own flag)
+  app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+
+  result
+}
+
+async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
   let screen = capture::capture_all_monitors()?;
 
   // Detect likely permission denial (black screenshot) on macOS
@@ -71,6 +121,7 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
       .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
       .show()
       .ok();
+    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
   }
 
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
@@ -79,27 +130,7 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
     return open_annotation_for_image(app, screen.image).await;
   }
 
-  capture::copy_to_clipboard(&screen.image)?;
-
-  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-
-  let saved = capture::save_to_disk(&screen.image, &config)?;
-  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
-
-  if let Some(ref path) = saved {
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.add_to_history(path.clone());
-    state.last_saved_path = Some(path.clone());
-  }
-
-  tray::refresh_tray_menu(app);
-  notify_capture(app, filepath_str.as_deref());
-
-  Ok(CaptureResultDto {
-    filepath: filepath_str,
-    copied_to_clipboard: true,
-  })
+  finalize_capture(app, &screen.image)
 }
 
 #[tauri::command]
@@ -140,9 +171,20 @@ pub async fn complete_region_capture(
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
     safe_crop(screenshot, left, top, w, h)?
   } else {
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    let screen = capture::capture_all_monitors()?;
-    safe_crop(&screen.image, left, top, w, h)?
+    // Wait for the overlay window to fully de-render before capturing.
+    // Spawn on a blocking thread to avoid blocking the async worker.
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+      std::thread::sleep(std::time::Duration::from_millis(150));
+    }).await;
+    match capture::capture_all_monitors() {
+      Ok(screen) => safe_crop(&screen.image, left, top, w, h)?,
+      Err(e) => {
+        // Close overlay even on capture failure to avoid leaking the window
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+        return Err(e);
+      }
+    }
   };
 
   // Defer overlay destroy
@@ -156,27 +198,7 @@ pub async fn complete_region_capture(
     return open_annotation_for_image(&app, image).await;
   }
 
-  capture::copy_to_clipboard(&image)?;
-
-  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-
-  let saved = capture::save_to_disk(&image, &config)?;
-  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
-
-  if let Some(ref path) = saved {
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.add_to_history(path.clone());
-    state.last_saved_path = Some(path.clone());
-  }
-
-  tray::refresh_tray_menu(&app);
-  notify_capture(&app, filepath_str.as_deref());
-
-  Ok(CaptureResultDto {
-    filepath: filepath_str,
-    copied_to_clipboard: true,
-  })
+  finalize_capture(&app, &image)
 }
 
 // -- Window capture commands --
@@ -184,7 +206,7 @@ pub async fn complete_region_capture(
 #[tauri::command]
 pub fn get_window_at_cursor(app: AppHandle) -> Option<window_capture::WindowRect> {
   let exclude_id = app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id;
-  let (cx, cy) = window_capture::get_cursor_pos();
+  let (cx, cy) = window_capture::get_cursor_pos()?;
   window_capture::get_window_rect_at(cx, cy, exclude_id)
 }
 
@@ -245,32 +267,13 @@ pub async fn complete_window_capture(
     return open_annotation_for_image(&app, image).await;
   }
 
-  capture::copy_to_clipboard(&image)?;
-
-  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-
-  let saved = capture::save_to_disk(&image, &config)?;
-  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
-
-  if let Some(ref path) = saved {
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.add_to_history(path.clone());
-    state.last_saved_path = Some(path.clone());
-  }
-
-  tray::refresh_tray_menu(&app);
-  notify_capture(&app, filepath_str.as_deref());
-
-  Ok(CaptureResultDto {
-    filepath: filepath_str,
-    copied_to_clipboard: true,
-  })
+  finalize_capture(&app, &image)
 }
 
 // -- Annotation commands --
 
 /// Store image for annotation and open the editor window.
+/// Sets `is_annotating` to block concurrent captures while the editor is open.
 async fn open_annotation_for_image(
   app: &AppHandle,
   image: image::RgbaImage,
@@ -282,6 +285,7 @@ async fn open_annotation_for_image(
     let mut state = s.lock_or_recover();
     state.pending_annotation = Some(image);
     state.pending_annotation_base64 = Some(base64);
+    state.is_annotating = true;
   }
 
   overlay::open_annotation_window(app)?;
@@ -294,11 +298,12 @@ async fn open_annotation_for_image(
 }
 
 /// Annotation editor: fetch the pending image as base64 PNG.
+/// Takes ownership (drops from state) to free memory since it's only needed once.
 #[tauri::command]
 pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
   app.state::<Mutex<AppState>>().lock_or_recover()
     .pending_annotation_base64
-    .clone()
+    .take()
     .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))
 }
 
@@ -339,31 +344,13 @@ pub async fn save_annotated_capture(
     .map_err(|e| AppError::Annotation(format!("Failed to decode PNG: {e}")))?
     .to_rgba8();
 
-  capture::copy_to_clipboard(&img)?;
+  let result = finalize_capture(&app, &img)?;
 
-  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-
-  let saved = capture::save_to_disk(&img, &config)?;
-  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
-
-  if let Some(ref path) = saved {
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.add_to_history(path.clone());
-    state.last_saved_path = Some(path.clone());
-  }
-
-  tray::refresh_tray_menu(&app);
-  notify_capture(&app, filepath_str.as_deref());
-
-  // Close annotation window and clean up state
+  // Close annotation window and clean up state (including is_annotating)
   let app2 = app.clone();
   tauri::async_runtime::spawn(async move { overlay::close_annotation_window(&app2); });
 
-  Ok(CaptureResultDto {
-    filepath: filepath_str,
-    copied_to_clipboard: true,
-  })
+  Ok(result)
 }
 
 /// Annotation editor: discard without saving.
@@ -398,8 +385,17 @@ pub async fn save_config(
   app: AppHandle,
   new_config: crate::config::AppConfig,
 ) -> Result<(), AppError> {
-  let folder = std::path::PathBuf::from(&new_config.save_folder);
-  std::fs::create_dir_all(&folder)?;
+  // Validate format
+  match new_config.format.as_str() {
+    "png" | "jpg" | "jpeg" | "webp" => {}
+    other => return Err(AppError::Config(format!("Invalid image format: {other}"))),
+  }
+
+  // Validate capture_mode
+  match new_config.capture_mode.as_str() {
+    "instant" | "freeze" => {}
+    other => return Err(AppError::Config(format!("Invalid capture mode: {other}"))),
+  }
 
   // Validate filename_suffix as a chrono format string
   let has_bad_format = chrono::format::strftime::StrftimeItems::new(&new_config.filename_suffix)
@@ -411,6 +407,10 @@ pub async fn save_config(
   // Validate hotkeys before persisting -- avoids saving config with broken hotkeys
   hotkeys::reload_hotkeys_with_config(&app, &new_config)
     .map_err(|e| AppError::Config(e.to_string()))?;
+
+  // All validation passed -- now create directory (side-effect only on success path)
+  let folder = std::path::PathBuf::from(&new_config.save_folder);
+  std::fs::create_dir_all(&folder)?;
 
   app.state::<Mutex<AppState>>().lock_or_recover().config = new_config.clone();
   config::save_config(&app, &new_config)?;

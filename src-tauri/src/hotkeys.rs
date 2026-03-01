@@ -19,6 +19,8 @@ fn register_hotkeys_from_config(
   app: &AppHandle,
   config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+  // Parse all hotkeys upfront before registering any -- if any fail to parse,
+  // we bail out before touching the global shortcut state.
   let region_shortcut: Shortcut = config.hotkey_region.parse().map_err(|e| {
     format!("Invalid region hotkey '{}': {}", config.hotkey_region, e)
   })?;
@@ -66,12 +68,25 @@ pub fn unregister_all(app: &AppHandle) {
   app.global_shortcut().unregister_all().ok();
 }
 
-/// Validate and register hotkeys from a new config without touching state.
-/// Used by save_config to validate hotkeys BEFORE persisting.
+/// Validate and register hotkeys from a new config.
+/// On failure, rolls back to the old config's hotkeys so the user is never
+/// left without working shortcuts.
 pub fn reload_hotkeys_with_config(
   app: &AppHandle,
-  config: &AppConfig,
+  new_config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
+  let old_config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+
   unregister_all(app);
-  register_hotkeys_from_config(app, config)
+
+  if let Err(e) = register_hotkeys_from_config(app, new_config) {
+    // Rollback: re-register the old (known-good) hotkeys
+    unregister_all(app);
+    if let Err(rollback_err) = register_hotkeys_from_config(app, &old_config) {
+      eprintln!("Failed to rollback hotkeys: {rollback_err}");
+    }
+    return Err(e);
+  }
+
+  Ok(())
 }
