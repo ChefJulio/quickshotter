@@ -4,6 +4,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::capture;
 use crate::error::AppError;
 use crate::state::{AppState, LockRecover};
+use crate::window_capture;
 
 pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
   let mode = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_mode.clone();
@@ -33,8 +34,15 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     }
   };
 
-  // Window mode always uses freeze-style (capture first, show frozen)
-  let needs_capture = mode == "freeze" || mode == "window";
+  // Start the window detection worker early so it can begin caching results
+  // while the overlay window is being created.
+  if mode == "window" {
+    window_capture::start();
+  }
+
+  // Freeze mode captures upfront for a frozen preview.
+  // Window mode skips this -- it shows a transparent overlay and captures on click.
+  let needs_capture = mode == "freeze";
 
   if needs_capture {
     let screen = match capture::capture_all_monitors() {
@@ -79,6 +87,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     .title("QuickShotter Overlay")
     .transparent(true)
     .decorations(false)
+    .shadow(false)
     .always_on_top(true)
     .resizable(false)
     .position(bounds.x as f64, bounds.y as f64)
@@ -119,6 +128,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 }
 
 pub fn close_overlay(app: &AppHandle) {
+  window_capture::stop();
   if let Some(overlay) = app.get_webview_window("overlay") {
     if let Err(e) = overlay.destroy() {
       eprintln!("Failed to destroy overlay window: {e}");
@@ -139,6 +149,7 @@ pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
   WebviewWindowBuilder::new(app, "annotation", WebviewUrl::App("annotation.html".into()))
     .title("QuickShotter - Annotate")
     .decorations(false)
+    .shadow(false)
     .always_on_top(true)
     .resizable(false)
     .position(bounds.x as f64, bounds.y as f64)

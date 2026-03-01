@@ -29,6 +29,7 @@ pub fn run() {
       commands::complete_region_capture,
       commands::cancel_capture,
       commands::get_overlay_mode,
+      commands::get_overlay_origin,
       commands::get_pending_screenshot,
       commands::get_config,
       commands::save_config,

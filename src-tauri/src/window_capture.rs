@@ -4,39 +4,65 @@
 /// topmost visible, non-minimized window at a given screen coordinate.
 /// Uses mouse_position crate for cross-platform cursor position.
 ///
-/// A persistent worker thread handles queries to avoid ~1ms thread-spawn
-/// overhead on every cursor poll during window capture mode.
+/// Architecture: a background worker thread continuously calls Window::all()
+/// (which can take 500ms+ on some systems) and caches the latest result.
+/// The Tauri command reads the cache instantly -- no blocking, no timeouts.
 
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, OnceLock};
 use xcap::Window;
 
-static WINDOW_QUERY_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-struct WindowQuery {
-  x: i32,
-  y: i32,
-  exclude_id: WindowId,
-  reply: mpsc::Sender<Option<WindowRect>>,
+/// Shared state between the worker thread and the Tauri command.
+struct DetectState {
+  /// Current cursor position (updated by the command).
+  cursor_x: i32,
+  cursor_y: i32,
+  /// Window ID to exclude from detection (the overlay).
+  exclude_id: u32,
+  /// Latest detection result (updated by the worker).
+  result: Option<WindowRect>,
+  /// Whether window capture mode is active.
+  active: bool,
 }
 
-static WORKER: OnceLock<mpsc::Sender<WindowQuery>> = OnceLock::new();
+static SHARED: OnceLock<Arc<StdMutex<DetectState>>> = OnceLock::new();
+static WORKER_SPAWNED: AtomicBool = AtomicBool::new(false);
 
-fn get_or_init_worker() -> &'static mpsc::Sender<WindowQuery> {
-  WORKER.get_or_init(|| {
-    let (tx, rx) = mpsc::channel::<WindowQuery>();
+fn shared() -> &'static Arc<StdMutex<DetectState>> {
+  SHARED.get_or_init(|| {
+    Arc::new(StdMutex::new(DetectState {
+      cursor_x: 0,
+      cursor_y: 0,
+      exclude_id: 0,
+      result: None,
+      active: false,
+    }))
+  })
+}
+
+fn ensure_worker() {
+  if WORKER_SPAWNED.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+    let state = shared().clone();
     std::thread::Builder::new()
       .name("window-detect".into())
       .spawn(move || {
-        for query in rx {
-          let result = find_window_at(query.x, query.y, query.exclude_id);
-          WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
-          query.reply.send(result).ok();
+        loop {
+          let (x, y, exclude, active) = {
+            let s = state.lock().unwrap();
+            (s.cursor_x, s.cursor_y, s.exclude_id, s.active)
+          };
+
+          if active {
+            let result = find_window_at(x, y, exclude);
+            state.lock().unwrap().result = result;
+          } else {
+            // Sleep longer when inactive to avoid wasting CPU
+            std::thread::sleep(std::time::Duration::from_millis(100));
+          }
         }
       })
       .expect("failed to spawn window detection thread");
-    tx
-  })
+  }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -58,30 +84,30 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
   }
 }
 
+/// Start the detection worker (call when entering window capture mode).
+pub fn start() {
+  let s = shared();
+  s.lock().unwrap().active = true;
+  ensure_worker();
+}
+
+/// Stop the detection worker (call when leaving window capture mode).
+pub fn stop() {
+  let s = shared();
+  let mut state = s.lock().unwrap();
+  state.active = false;
+  state.result = None;
+}
+
+/// Update cursor position and return the latest cached detection result.
+/// Returns instantly -- never blocks on Window::all().
 pub fn get_window_rect_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {
-  // Skip if a previous query is still being processed
-  if WINDOW_QUERY_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-    return None;
-  }
-
-  let worker = get_or_init_worker();
-  let (reply_tx, reply_rx) = mpsc::channel();
-  if worker.send(WindowQuery { x, y, exclude_id, reply: reply_tx }).is_err() {
-    WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
-    return None;
-  }
-
-  match reply_rx.recv_timeout(std::time::Duration::from_millis(500)) {
-    Ok(result) => result,
-    Err(_) => {
-      // Reset flag so future queries aren't permanently blocked.
-      // The worker thread may also reset it when it finishes, but
-      // a redundant store(false) is harmless.
-      WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
-      eprintln!("window_capture: Window::all() timed out");
-      None
-    }
-  }
+  let s = shared();
+  let mut state = s.lock().unwrap();
+  state.cursor_x = x;
+  state.cursor_y = y;
+  state.exclude_id = exclude_id;
+  state.result.clone()
 }
 
 fn find_window_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {

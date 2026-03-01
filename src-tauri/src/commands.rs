@@ -32,6 +32,14 @@ pub fn get_overlay_mode(app: AppHandle) -> String {
   app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone()
 }
 
+/// Returns the virtual desktop origin so the overlay JS can convert
+/// absolute screen coordinates to overlay-local coordinates.
+#[tauri::command]
+pub fn get_overlay_origin() -> Result<(i32, i32), AppError> {
+  let bounds = capture::get_desktop_bounds()?;
+  Ok((bounds.x, bounds.y))
+}
+
 /// In freeze/window mode, the overlay pulls the pre-captured screenshot.
 /// Takes ownership of the base64 data (drops it from state) to free memory
 /// since the overlay only needs it once.
@@ -255,23 +263,15 @@ async fn complete_window_capture_inner(
     return Err(AppError::Capture("Window too small".to_string()));
   }
 
-  // Get the origin offset from the virtual desktop
-  let bounds = capture::get_desktop_bounds()?;
-  let origin_x = bounds.x;
-  let origin_y = bounds.y;
+  // Capture fresh after overlay is hidden (outer function already hid it)
+  let _ = tauri::async_runtime::spawn_blocking(|| {
+    std::thread::sleep(std::time::Duration::from_millis(150));
+  }).await;
 
-  let crop_x = (left - origin_x).max(0) as u32;
-  let crop_y = (top - origin_y).max(0) as u32;
-
-  let image = {
-    let s = app.state::<Mutex<AppState>>();
-    let state = s.lock_or_recover();
-    let screenshot = state
-      .pending_screenshot
-      .as_ref()
-      .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
-    safe_crop(screenshot, crop_x, crop_y, w, h)?
-  };
+  let screen = capture::capture_all_monitors()?;
+  let crop_x = (left - screen.origin_x).max(0) as u32;
+  let crop_y = (top - screen.origin_y).max(0) as u32;
+  let image = safe_crop(&screen.image, crop_x, crop_y, w, h)?;
 
   // Check if we should open annotation editor
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;

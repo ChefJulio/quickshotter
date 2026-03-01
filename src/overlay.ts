@@ -30,9 +30,13 @@ function scale(): number {
 
 // Window capture state
 let highlightRect: { x: number; y: number; w: number; h: number } | null = null;
-// Physical-pixel coords from Rust, sent back directly for capture
+// Absolute screen coords from Rust, sent back directly for capture
 let highlightPhysical: { left: number; top: number; right: number; bottom: number } | null = null;
 let windowPollPending = false;
+// Virtual desktop origin -- screen coords from Rust are absolute, so we subtract
+// this to get overlay-local coordinates before converting to CSS pixels.
+let overlayOriginX = 0;
+let overlayOriginY = 0;
 
 function initCanvas() {
   canvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
@@ -60,6 +64,14 @@ function initCanvas() {
 function showInstantOverlay() {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function showWindowOverlay() {
+  // Nearly invisible fill -- just enough to capture mouse events on Windows.
+  // The user sees through to the real desktop.
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.01)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  canvas.style.cursor = 'pointer';
 }
 
 function loadScreenshot(base64Data: string) {
@@ -197,15 +209,17 @@ function onMouseMoveWindow() {
   requestAnimationFrame(async () => {
     try {
       const rect = await invoke<WindowRect | null>('get_window_at_cursor');
-      if (rect && screenshotImage) {
-        // Rust returns physical pixel coords; convert to CSS for canvas drawing
+      if (rect) {
+        // Rust returns absolute screen coords. Subtract overlay origin to get
+        // overlay-local coords, then divide by DPR for CSS canvas pixels.
+        const dpr = window.devicePixelRatio || 1;
         highlightRect = {
-          x: rect.left / scale(),
-          y: rect.top / scale(),
-          w: (rect.right - rect.left) / scale(),
-          h: (rect.bottom - rect.top) / scale(),
+          x: (rect.left - overlayOriginX) / dpr,
+          y: (rect.top - overlayOriginY) / dpr,
+          w: (rect.right - rect.left) / dpr,
+          h: (rect.bottom - rect.top) / dpr,
         };
-        // Keep original physical coords for sending back to Rust
+        // Keep original absolute coords for sending back to Rust
         highlightPhysical = {
           left: rect.left,
           top: rect.top,
@@ -224,17 +238,13 @@ function onMouseMoveWindow() {
 }
 
 function drawWindowHighlight() {
-  if (!screenshotImage) return;
-
-  // Redraw dimmed background
-  ctx.drawImage(dimmedCanvas, 0, 0);
+  // Clear and redraw the near-invisible background
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.01)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (highlightRect) {
     const { x, y, w, h } = highlightRect;
-    // Sample the physical-pixel screenshot at scaled coords, draw at CSS coords
-    const sx = x * scale(), sy = y * scale(), sw = w * scale(), sh = h * scale();
-    ctx.drawImage(screenshotImage, sx, sy, sw, sh, x, y, w, h);
-
     // Blue border around highlighted window
     ctx.strokeStyle = '#00aaff';
     ctx.lineWidth = 3;
@@ -285,7 +295,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
   try {
     mode = await invoke<string>('get_overlay_mode');
-    if (mode === 'freeze' || mode === 'window') {
+    if (mode === 'window') {
+      const origin = await invoke<[number, number]>('get_overlay_origin');
+      overlayOriginX = origin[0];
+      overlayOriginY = origin[1];
+      showWindowOverlay();
+    } else if (mode === 'freeze') {
       const base64Data: string = await invoke('get_pending_screenshot');
       loadScreenshot(base64Data);
     } else {
