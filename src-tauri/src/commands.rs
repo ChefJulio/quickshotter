@@ -269,8 +269,18 @@ async fn complete_window_capture_inner(
   }).await;
 
   let screen = capture::capture_all_monitors()?;
-  let crop_x = (left - screen.origin_x).max(0) as u32;
-  let crop_y = (top - screen.origin_y).max(0) as u32;
+
+  // xcap window coordinates are in logical points on macOS but physical pixels
+  // on Windows. The captured image is always in physical pixels. Compute the
+  // scale factor so we crop at the correct physical pixel offsets.
+  let bounds = capture::get_desktop_bounds()?;
+  let sx = screen.image.width() as f64 / bounds.width.max(1) as f64;
+  let sy = screen.image.height() as f64 / bounds.height.max(1) as f64;
+
+  let crop_x = ((left - screen.origin_x) as f64 * sx).max(0.0) as u32;
+  let crop_y = ((top - screen.origin_y) as f64 * sy).max(0.0) as u32;
+  let w = ((right - left) as f64 * sx).max(1.0) as u32;
+  let h = ((bottom - top) as f64 * sy).max(1.0) as u32;
   let image = safe_crop(&screen.image, crop_x, crop_y, w, h)?;
 
   // Check if we should open annotation editor

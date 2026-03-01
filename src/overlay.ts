@@ -37,6 +37,9 @@ let windowPollPending = false;
 // this to get overlay-local coordinates before converting to CSS pixels.
 let overlayOriginX = 0;
 let overlayOriginY = 0;
+// On macOS, xcap returns logical points that match CSS pixels directly (scale = 1).
+// On Windows, xcap returns physical pixels requiring devicePixelRatio conversion.
+const xcapScale = /Mac/.test(navigator.platform) ? 1 : (window.devicePixelRatio || 1);
 
 function initCanvas() {
   canvas = document.getElementById('overlay-canvas') as HTMLCanvasElement;
@@ -107,6 +110,12 @@ function loadScreenshot(base64Data: string) {
 // -- Region capture handlers --
 
 function onMouseDown(e: MouseEvent) {
+  // Right-click cancels (contextmenu may not fire during an active drag)
+  if (e.button === 2) {
+    e.preventDefault();
+    cancel();
+    return;
+  }
   if (e.button !== 0) return;
 
   if (mode === 'window') {
@@ -210,14 +219,15 @@ function onMouseMoveWindow() {
     try {
       const rect = await invoke<WindowRect | null>('get_window_at_cursor');
       if (rect) {
-        // Rust returns absolute screen coords. Subtract overlay origin to get
-        // overlay-local coords, then divide by DPR for CSS canvas pixels.
-        const dpr = window.devicePixelRatio || 1;
+        // Rust returns absolute screen coords in xcap's coordinate space.
+        // Subtract overlay origin, then divide by xcapScale for CSS pixels.
+        // macOS: xcap uses logical points = CSS pixels (xcapScale = 1).
+        // Windows: xcap uses physical pixels (xcapScale = devicePixelRatio).
         highlightRect = {
-          x: (rect.left - overlayOriginX) / dpr,
-          y: (rect.top - overlayOriginY) / dpr,
-          w: (rect.right - rect.left) / dpr,
-          h: (rect.bottom - rect.top) / dpr,
+          x: (rect.left - overlayOriginX) / xcapScale,
+          y: (rect.top - overlayOriginY) / xcapScale,
+          w: (rect.right - rect.left) / xcapScale,
+          h: (rect.bottom - rect.top) / xcapScale,
         };
         // Keep original absolute coords for sending back to Rust
         highlightPhysical = {

@@ -750,6 +750,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Init toolbar AFTER default_tool is set so highlights are correct
     initToolbar();
 
+    // Position toolbar below system UI (e.g. macOS menu bar) to prevent clipping.
+    // screen.availTop gives the first y-coordinate not occupied by system chrome.
+    const toolbar = document.getElementById('annotation-toolbar')!;
+    const safeTop = Math.max(8, ((window.screen as any).availTop || 0) + 8);
+    toolbar.style.top = `${safeTop}px`;
+
     // Load the captured image
     const base64Data: string = await invoke('get_pending_annotation');
     const img = new Image();
