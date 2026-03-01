@@ -24,9 +24,11 @@ interface HotkeyState {
   recording: boolean;
 }
 
+const isMac = navigator.platform.toUpperCase().includes('MAC');
+
 function formatHotkeyDisplay(raw: string): string {
   return raw
-    .replace(/CmdOrCtrl/g, 'Ctrl')
+    .replace(/CmdOrCtrl/g, isMac ? 'Cmd' : 'Ctrl')
     .split('+')
     .map(p => p.charAt(0).toUpperCase() + p.slice(1))
     .join(' + ');
@@ -184,11 +186,14 @@ async function saveConfig() {
     launch_on_startup: launchOnStartupCheckbox.checked,
   };
 
+  const saveError = document.getElementById('save-error')!;
   try {
+    saveError.style.display = 'none';
     await invoke('save_config', { newConfig: config });
     getCurrentWindow().close();
   } catch (e) {
-    alert(`Failed to save settings: ${e}`);
+    saveError.textContent = `Failed to save: ${e}`;
+    saveError.style.display = 'block';
   }
 }
 

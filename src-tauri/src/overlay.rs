@@ -11,19 +11,38 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
 }
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
-  // Check if already capturing
-  if app.state::<Mutex<AppState>>().lock_or_recover().is_capturing {
-    return Ok(());
+  // Atomically check and set is_capturing in a single lock scope
+  // to prevent two rapid hotkey presses from opening duplicate overlays.
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    if state.is_capturing {
+      return Ok(());
+    }
+    state.is_capturing = true;
+    state.overlay_mode = mode.to_string();
   }
 
   // Get virtual desktop bounds (fast, no image capture)
-  let bounds = capture::get_desktop_bounds()?;
+  let bounds = match capture::get_desktop_bounds() {
+    Ok(b) => b,
+    Err(e) => {
+      app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+      return Err(e);
+    }
+  };
 
   // Window mode always uses freeze-style (capture first, show frozen)
   let needs_capture = mode == "freeze" || mode == "window";
 
   if needs_capture {
-    let screen = capture::capture_all_monitors()?;
+    let screen = match capture::capture_all_monitors() {
+      Ok(s) => s,
+      Err(e) => {
+        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+        return Err(e);
+      }
+    };
 
     // Detect likely permission denial (black screenshot) on macOS
     #[cfg(target_os = "macos")]
@@ -37,19 +56,18 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
         .ok();
     }
 
-    let base64_data = capture::image_to_base64(&screen.image)?;
+    let base64_data = match capture::image_to_base64(&screen.image) {
+      Ok(d) => d,
+      Err(e) => {
+        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+        return Err(e);
+      }
+    };
 
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    state.is_capturing = true;
-    state.overlay_mode = mode.to_string();
     state.pending_screenshot = Some(screen.image);
     state.pending_base64 = Some(base64_data);
-  } else {
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.is_capturing = true;
-    state.overlay_mode = mode.to_string();
   }
 
   // Span overlay across the entire virtual desktop (all monitors)

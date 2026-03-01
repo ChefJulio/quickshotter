@@ -190,3 +190,22 @@ button:hover {
 @media (prefers-color-scheme: dark) {
   .folder-warning { color: #f0a040; }
 }
+
+/* Save error banner */
+.save-error {
+  background: #fdecea;
+  color: #c62828;
+  border: 1px solid #ef9a9a;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .save-error {
+    background: #3b1a1a;
+    color: #ef9a9a;
+    border-color: #c62828;
+  }
+}

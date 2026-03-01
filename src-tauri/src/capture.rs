@@ -171,20 +171,21 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
 
 /// Convert RGBA image to RGB bytes without cloning the source image.
 /// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
-fn rgba_to_rgb(img: &RgbaImage) -> image::RgbImage {
+fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
   let (w, h) = (img.width(), img.height());
   let rgb_bytes: Vec<u8> = img
     .as_raw()
     .chunks_exact(4)
     .flat_map(|px| [px[0], px[1], px[2]])
     .collect();
-  image::RgbImage::from_raw(w, h, rgb_bytes).expect("RGB buffer size mismatch")
+  image::RgbImage::from_raw(w, h, rgb_bytes)
+    .ok_or_else(|| AppError::Capture("RGB buffer size mismatch".to_string()))
 }
 
 /// Encode an image as JPEG base64 for sending to the overlay webview.
 /// Uses JPEG instead of PNG -- ~10x faster encoding, only used for preview.
 pub fn image_to_base64(img: &RgbaImage) -> Result<String, AppError> {
-  let rgb = rgba_to_rgb(img);
+  let rgb = rgba_to_rgb(img)?;
   let mut buf = Cursor::new(Vec::new());
   let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
   encoder
@@ -278,7 +279,7 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
 
   match ext.as_str() {
     "jpg" | "jpeg" => {
-      let rgb = rgba_to_rgb(img);
+      let rgb = rgba_to_rgb(img)?;
       let mut buf = Cursor::new(Vec::new());
       let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85);
       encoder

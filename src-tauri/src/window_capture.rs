@@ -74,7 +74,10 @@ pub fn get_window_rect_at(x: i32, y: i32, exclude_id: WindowId) -> Option<Window
   match reply_rx.recv_timeout(std::time::Duration::from_millis(500)) {
     Ok(result) => result,
     Err(_) => {
-      // Worker thread will reset WINDOW_QUERY_ACTIVE when it finishes
+      // Reset flag so future queries aren't permanently blocked.
+      // The worker thread may also reset it when it finishes, but
+      // a redundant store(false) is harmless.
+      WINDOW_QUERY_ACTIVE.store(false, Ordering::SeqCst);
       eprintln!("window_capture: Window::all() timed out");
       None
     }

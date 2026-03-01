@@ -706,8 +706,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
 
-  initToolbar();
-
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mouseup', onMouseUp);
@@ -722,8 +720,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     modifierTools = await invoke<AnnotationConfig>('get_annotation_config');
     if (modifierTools.default_tool && modifierTools.default_tool !== 'none') {
       activeTool = modifierTools.default_tool;
-      updateToolbarHighlights(toolBtns);
     }
+
+    // Init toolbar AFTER default_tool is set so highlights are correct
+    initToolbar();
 
     // Load the captured image
     const base64Data: string = await invoke('get_pending_annotation');
@@ -736,6 +736,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       const win = getCurrentWindow();
       await win.show();
       await win.setFocus();
+    };
+    img.onerror = () => {
+      console.error('Failed to load annotation image');
+      cancelAnnotation();
     };
     img.src = `data:image/png;base64,${base64Data}`;
   } catch (e) {

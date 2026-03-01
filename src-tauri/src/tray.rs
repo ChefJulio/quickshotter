@@ -9,16 +9,22 @@ use tauri::{
 use crate::state::{AppState, LockRecover};
 
 fn format_hotkey_display(raw: &str) -> String {
-  raw.replace("CmdOrCtrl", "Ctrl")
+  #[cfg(target_os = "macos")]
+  let result = raw.replace("CmdOrCtrl", "Cmd");
+  #[cfg(not(target_os = "macos"))]
+  let result = raw.replace("CmdOrCtrl", "Ctrl");
+  result
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
   let menu = build_tray_menu(app, &[], &config)?;
 
-  TrayIconBuilder::with_id("main")
-    .icon(app.default_window_icon().unwrap().clone())
-    .menu(&menu)
+  let mut tray = TrayIconBuilder::with_id("main");
+  if let Some(icon) = app.default_window_icon() {
+    tray = tray.icon(icon.clone());
+  }
+  tray.menu(&menu)
     .tooltip("QuickShotter")
     .on_menu_event(move |app, event| {
       match event.id().as_ref() {
@@ -48,8 +54,8 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         }
         id => {
           // History items: "history_0", "history_1", etc.
-          if id.starts_with("history_") {
-            if let Ok(idx) = id.strip_prefix("history_").unwrap().parse::<usize>() {
+          if let Some(suffix) = id.strip_prefix("history_") {
+            if let Ok(idx) = suffix.parse::<usize>() {
               let s = app.state::<Mutex<AppState>>();
               let state = s.lock_or_recover();
               if let Some(path) = state.capture_history.get(idx) {
