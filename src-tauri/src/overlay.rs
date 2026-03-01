@@ -24,6 +24,19 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
   if needs_capture {
     let screen = capture::capture_all_monitors()?;
+
+    // Detect likely permission denial (black screenshot) on macOS
+    #[cfg(target_os = "macos")]
+    if capture::is_likely_blank(&screen.image) {
+      use tauri_plugin_notification::NotificationExt;
+      app.notification()
+        .builder()
+        .title("Screen Recording Permission Required")
+        .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
+        .show()
+        .ok();
+    }
+
     let base64_data = capture::image_to_base64(&screen.image)?;
 
     let s = app.state::<Mutex<AppState>>();
@@ -97,11 +110,15 @@ pub fn close_overlay(app: &AppHandle) {
 }
 
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
+  // Use explicit position + size instead of .fullscreen(true) to avoid
+  // macOS native fullscreen animation (slides into a new Space).
+  let bounds = capture::get_desktop_bounds()?;
   WebviewWindowBuilder::new(app, "annotation", WebviewUrl::App("annotation.html".into()))
     .title("QuickShotter - Annotate")
-    .fullscreen(true)
     .decorations(false)
     .always_on_top(true)
+    .position(bounds.x as f64, bounds.y as f64)
+    .inner_size(bounds.width as f64, bounds.height as f64)
     .visible(false)
     .skip_taskbar(true)
     .build()?;

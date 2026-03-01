@@ -20,8 +20,13 @@ let currentY = 0;
 let mode: string = 'instant';
 let cancelled = false;
 
-// DPI scale factor: CSS pixels * dpr = physical pixels (what Rust uses)
-const dpr = window.devicePixelRatio || 1;
+// DPI scale factor: CSS pixels * scale = physical pixels (what Rust uses).
+// In freeze/window mode, derived from the actual screenshot dimensions
+// for correct mixed-DPI multi-monitor mapping. Falls back to devicePixelRatio.
+let captureScale: number | null = null;
+function scale(): number {
+  return captureScale ?? (window.devicePixelRatio || 1);
+}
 
 // Window capture state
 let highlightRect: { x: number; y: number; w: number; h: number } | null = null;
@@ -60,6 +65,11 @@ function loadScreenshot(base64Data: string) {
   const img = new Image();
   img.onload = () => {
     screenshotImage = img;
+
+    // Derive scale from actual screenshot dimensions vs CSS canvas.
+    // This correctly handles mixed-DPI multi-monitor setups where
+    // devicePixelRatio alone would be wrong.
+    captureScale = img.naturalWidth / canvas.width;
 
     // Keep canvas at CSS pixel resolution; draw the physical-pixel screenshot
     // scaled to fit so everything uses a single CSS coordinate space.
@@ -127,10 +137,10 @@ function onMouseUp(e: MouseEvent) {
   }
 
   // Convert CSS coords to physical pixels for Rust
-  const x1 = Math.round(cssX1 * dpr);
-  const y1 = Math.round(cssY1 * dpr);
-  const x2 = Math.round(cssX2 * dpr);
-  const y2 = Math.round(cssY2 * dpr);
+  const x1 = Math.round(cssX1 * scale());
+  const y1 = Math.round(cssY1 * scale());
+  const x2 = Math.round(cssX2 * scale());
+  const y2 = Math.round(cssY2 * scale());
   invoke('complete_region_capture', { x1, y1, x2, y2 }).catch(() => cancel());
 }
 
@@ -147,7 +157,7 @@ function drawSelection() {
   if ((mode === 'freeze') && screenshotImage) {
     ctx.drawImage(dimmedCanvas, 0, 0);
     // Sample the physical-pixel screenshot at scaled coords, draw at CSS coords
-    const sx = x1 * dpr, sy = y1 * dpr, sw = w * dpr, sh = h * dpr;
+    const sx = x1 * scale(), sy = y1 * scale(), sw = w * scale(), sh = h * scale();
     ctx.drawImage(screenshotImage, sx, sy, sw, sh, x1, y1, w, h);
   } else {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -162,8 +172,8 @@ function drawSelection() {
   ctx.strokeRect(x1, y1, w, h);
 
   // Dimension label -- show physical pixel dimensions (actual capture size)
-  const physW = Math.round(w * dpr);
-  const physH = Math.round(h * dpr);
+  const physW = Math.round(w * scale());
+  const physH = Math.round(h * scale());
   const label = `${physW} x ${physH}`;
   ctx.font = 'bold 13px Consolas, monospace';
   const labelY = y1 > 25 ? y1 - 8 : y2 + 18;
@@ -186,10 +196,10 @@ function onMouseMoveWindow() {
       if (rect && screenshotImage) {
         // Rust returns physical pixel coords; convert to CSS for canvas drawing
         highlightRect = {
-          x: rect.left / dpr,
-          y: rect.top / dpr,
-          w: (rect.right - rect.left) / dpr,
-          h: (rect.bottom - rect.top) / dpr,
+          x: rect.left / scale(),
+          y: rect.top / scale(),
+          w: (rect.right - rect.left) / scale(),
+          h: (rect.bottom - rect.top) / scale(),
         };
         // Keep original physical coords for sending back to Rust
         highlightPhysical = {
@@ -218,7 +228,7 @@ function drawWindowHighlight() {
   if (highlightRect) {
     const { x, y, w, h } = highlightRect;
     // Sample the physical-pixel screenshot at scaled coords, draw at CSS coords
-    const sx = x * dpr, sy = y * dpr, sw = w * dpr, sh = h * dpr;
+    const sx = x * scale(), sy = y * scale(), sw = w * scale(), sh = h * scale();
     ctx.drawImage(screenshotImage, sx, sy, sw, sh, x, y, w, h);
 
     // Blue border around highlighted window
@@ -256,8 +266,8 @@ function captureFullscreen() {
   invoke('complete_region_capture', {
     x1: 0,
     y1: 0,
-    x2: Math.round(canvas.width * dpr),
-    y2: Math.round(canvas.height * dpr),
+    x2: Math.round(canvas.width * scale()),
+    y2: Math.round(canvas.height * scale()),
   });
 }
 
@@ -275,6 +285,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     const win = getCurrentWindow();
     await win.show();
     await win.setFocus();
+
+    // Cancel capture if overlay loses OS focus (e.g. Cmd+Tab, system UI).
+    // Small delay avoids false triggers from momentary focus transitions.
+    window.addEventListener('blur', () => {
+      if (isDragging) return; // don't interrupt active selection
+      setTimeout(() => {
+        if (!document.hasFocus()) cancel();
+      }, 200);
+    });
   } catch (e) {
     console.error('Overlay init failed:', e);
     cancel();

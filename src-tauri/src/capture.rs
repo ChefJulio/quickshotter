@@ -85,25 +85,49 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
     });
   }
 
-  // Multi-monitor: calculate virtual desktop bounds
+  // Multi-monitor: capture each monitor and compute DPI-aware stitching.
+  // xcap may return logical or physical coordinates depending on platform;
+  // we derive the effective scale per monitor by comparing capture image
+  // dimensions to reported dimensions, then stitch at max_scale so the
+  // canvas is at uniform physical resolution.
+  struct MonCapture {
+    img: RgbaImage,
+    reported_x: i32,
+    reported_y: i32,
+    reported_w: u32,
+    reported_h: u32,
+  }
+
+  let mut captures = Vec::new();
   let mut min_x = i32::MAX;
   let mut min_y = i32::MAX;
   let mut max_x = i32::MIN;
   let mut max_y = i32::MIN;
+  let mut max_scale: f64 = 1.0;
 
   for m in &monitors {
-    let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
-    let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
-    let w = m.width().map_err(|e| AppError::Capture(e.to_string()))? as i32;
-    let h = m.height().map_err(|e| AppError::Capture(e.to_string()))? as i32;
-    min_x = min_x.min(x);
-    min_y = min_y.min(y);
-    max_x = max_x.max(x + w);
-    max_y = max_y.max(y + h);
+    let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
+    let rx = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let ry = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    let rw = m.width().map_err(|e| AppError::Capture(e.to_string()))?;
+    let rh = m.height().map_err(|e| AppError::Capture(e.to_string()))?;
+
+    let scale = img.width() as f64 / rw.max(1) as f64;
+    max_scale = max_scale.max(scale);
+
+    min_x = min_x.min(rx);
+    min_y = min_y.min(ry);
+    max_x = max_x.max(rx + rw as i32);
+    max_y = max_y.max(ry + rh as i32);
+
+    captures.push(MonCapture { img, reported_x: rx, reported_y: ry, reported_w: rw, reported_h: rh });
   }
 
-  let total_w = (max_x - min_x) as u32;
-  let total_h = (max_y - min_y) as u32;
+  // Canvas at max_scale: reported dimensions * max_scale = physical pixels.
+  // On uniform-DPI setups max_scale is 1.0 (if xcap returns physical) or
+  // uniform (e.g. 2.0 on all-Retina), so this is equivalent to current code.
+  let total_w = ((max_x - min_x) as f64 * max_scale).ceil() as u32;
+  let total_h = ((max_y - min_y) as f64 * max_scale).ceil() as u32;
 
   // Guard against unreasonable allocations from multi-monitor setups
   const MAX_PIXELS: u64 = 64_000_000; // ~256MB for RGBA
@@ -116,14 +140,24 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
 
   let mut canvas: RgbaImage = ImageBuffer::new(total_w, total_h);
 
-  for m in &monitors {
-    let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
-    let mx = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
-    let my = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
-    let offset_x = (mx - min_x) as u32;
-    let offset_y = (my - min_y) as u32;
-    canvas.copy_from(&img, offset_x, offset_y)
-      .map_err(|e| AppError::Capture(e.to_string()))?;
+  for c in &captures {
+    let offset_x = ((c.reported_x - min_x) as f64 * max_scale).round() as u32;
+    let offset_y = ((c.reported_y - min_y) as f64 * max_scale).round() as u32;
+    let target_w = (c.reported_w as f64 * max_scale).round() as u32;
+    let target_h = (c.reported_h as f64 * max_scale).round() as u32;
+
+    if c.img.width() == target_w && c.img.height() == target_h {
+      // Same scale -- place directly (common: uniform DPI or xcap returns physical)
+      canvas.copy_from(&c.img, offset_x, offset_y)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
+    } else {
+      // Mixed DPI -- resize lower-DPI capture up to max_scale
+      let resized = image::imageops::resize(
+        &c.img, target_w, target_h, image::imageops::FilterType::Triangle,
+      );
+      canvas.copy_from(&resized, offset_x, offset_y)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
+    }
   }
 
   Ok(ScreenCapture {
@@ -167,6 +201,21 @@ pub fn image_to_base64_png(img: &RgbaImage) -> Result<String, AppError> {
     .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
     .map_err(|e: image::ImageError| AppError::Capture(e.to_string()))?;
   Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
+}
+
+/// Check if a captured image is likely blank (all black pixels).
+/// On macOS, this typically means screen recording permission was denied.
+#[cfg(target_os = "macos")]
+pub fn is_likely_blank(img: &RgbaImage) -> bool {
+  if img.width() == 0 || img.height() == 0 {
+    return true;
+  }
+  // Sample every ~997th pixel (prime stride avoids repeating patterns)
+  img
+    .as_raw()
+    .chunks_exact(4)
+    .step_by(997)
+    .all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0)
 }
 
 /// Copy an RGBA image to the system clipboard.

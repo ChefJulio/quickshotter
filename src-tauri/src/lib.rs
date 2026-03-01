@@ -50,10 +50,14 @@ pub fn run() {
       if let Err(e) = hotkeys::register_hotkeys(&app.handle()) {
         eprintln!("Failed to register hotkeys: {e}");
         use tauri_plugin_notification::NotificationExt;
+        #[cfg(target_os = "macos")]
+        let body = format!("Failed to register hotkeys: {}\nCheck System Settings > Privacy & Security > Accessibility", e);
+        #[cfg(not(target_os = "macos"))]
+        let body = format!("Failed to register hotkeys: {}", e);
         app.handle().notification()
           .builder()
           .title("QuickShotter")
-          .body(&format!("Failed to register hotkeys: {}", e))
+          .body(&body)
           .show()
           .ok();
       }
