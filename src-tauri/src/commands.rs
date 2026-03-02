@@ -102,7 +102,7 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    if state.is_capturing || state.is_annotating {
+    if state.is_capturing || state.is_annotating || state.is_recording {
       return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
     }
     state.is_capturing = true;
@@ -182,10 +182,11 @@ async fn complete_region_capture_inner(
     return Err(AppError::Capture("Selection too small".to_string()));
   }
 
-  // Check which mode we're in
-  let mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
+  // Use pre-captured image if available (freeze mode always; on macOS, all modes
+  // pre-capture to avoid timing issues with overlay compositing).
+  let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
 
-  let image = if mode == "freeze" || mode == "window" {
+  let image = if has_pending {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
     let screenshot = state
@@ -263,25 +264,43 @@ async fn complete_window_capture_inner(
     return Err(AppError::Capture("Window too small".to_string()));
   }
 
-  // Capture fresh after overlay is hidden (outer function already hid it)
-  let _ = tauri::async_runtime::spawn_blocking(|| {
-    std::thread::sleep(std::time::Duration::from_millis(150));
-  }).await;
-
-  let screen = capture::capture_all_monitors()?;
+  // Use pre-captured image if available (on macOS, all modes pre-capture to
+  // avoid timing issues with overlay compositing after hide).
+  let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
 
   // xcap window coordinates are in logical points on macOS but physical pixels
   // on Windows. The captured image is always in physical pixels. Compute the
   // scale factor so we crop at the correct physical pixel offsets.
   let bounds = capture::get_desktop_bounds()?;
-  let sx = screen.image.width() as f64 / bounds.width.max(1) as f64;
-  let sy = screen.image.height() as f64 / bounds.height.max(1) as f64;
 
-  let crop_x = ((left - screen.origin_x) as f64 * sx).max(0.0) as u32;
-  let crop_y = ((top - screen.origin_y) as f64 * sy).max(0.0) as u32;
-  let w = ((right - left) as f64 * sx).max(1.0) as u32;
-  let h = ((bottom - top) as f64 * sy).max(1.0) as u32;
-  let image = safe_crop(&screen.image, crop_x, crop_y, w, h)?;
+  let image = if has_pending {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    let screenshot = state
+      .pending_screenshot
+      .as_ref()
+      .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
+    let sx = screenshot.width() as f64 / bounds.width.max(1) as f64;
+    let sy = screenshot.height() as f64 / bounds.height.max(1) as f64;
+    let crop_x = ((left - bounds.x) as f64 * sx).max(0.0) as u32;
+    let crop_y = ((top - bounds.y) as f64 * sy).max(0.0) as u32;
+    let w = ((right - left) as f64 * sx).max(1.0) as u32;
+    let h = ((bottom - top) as f64 * sy).max(1.0) as u32;
+    safe_crop(screenshot, crop_x, crop_y, w, h)?
+  } else {
+    // Capture fresh after overlay is hidden (outer function already hid it)
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+      std::thread::sleep(std::time::Duration::from_millis(150));
+    }).await;
+    let screen = capture::capture_all_monitors()?;
+    let sx = screen.image.width() as f64 / bounds.width.max(1) as f64;
+    let sy = screen.image.height() as f64 / bounds.height.max(1) as f64;
+    let crop_x = ((left - screen.origin_x) as f64 * sx).max(0.0) as u32;
+    let crop_y = ((top - screen.origin_y) as f64 * sy).max(0.0) as u32;
+    let w = ((right - left) as f64 * sx).max(1.0) as u32;
+    let h = ((bottom - top) as f64 * sy).max(1.0) as u32;
+    safe_crop(&screen.image, crop_x, crop_y, w, h)?
+  };
 
   // Check if we should open annotation editor
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
@@ -428,6 +447,18 @@ pub async fn save_config(
     other => return Err(AppError::Config(format!("Invalid capture mode: {other}"))),
   }
 
+  // Validate recording format
+  match new_config.recording_format.as_str() {
+    "mp4" | "gif" => {}
+    other => return Err(AppError::Config(format!("Invalid recording format: {other}"))),
+  }
+
+  // Validate recording FPS
+  match new_config.recording_fps {
+    10 | 15 | 24 | 30 => {}
+    other => return Err(AppError::Config(format!("Invalid recording FPS: {other}"))),
+  }
+
   // Validate filename_suffix as a chrono format string
   let has_bad_format = chrono::format::strftime::StrftimeItems::new(&new_config.filename_suffix)
     .any(|item| matches!(item, chrono::format::Item::Error));
@@ -542,4 +573,216 @@ fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
     .body(&body)
     .show()
     .ok();
+}
+
+// -- Recording helpers --
+
+fn build_pipeline_config(
+  config: &crate::config::AppConfig,
+  region: Option<crate::recording::RecordingRegion>,
+) -> Result<crate::recording::PipelineConfig, AppError> {
+  let format = match config.recording_format.as_str() {
+    "gif" => crate::recording::RecordingFormat::Gif,
+    _ => crate::recording::RecordingFormat::Mp4,
+  };
+
+  let ext = match format {
+    crate::recording::RecordingFormat::Gif => "gif",
+    crate::recording::RecordingFormat::Mp4 => "mp4",
+  };
+
+  let folder = std::path::PathBuf::from(&config.save_folder);
+  std::fs::create_dir_all(&folder)?;
+
+  let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+  let filename = format!("recording_{}.{}", timestamp, ext);
+  let output_path = folder.join(filename);
+
+  Ok(crate::recording::PipelineConfig {
+    format,
+    fps: config.recording_fps,
+    region,
+    output_path,
+    gif_max_duration_secs: config.gif_max_duration,
+    gif_max_width: config.gif_max_width,
+  })
+}
+
+fn notify_recording(app: &AppHandle, path: &std::path::Path) {
+  use tauri_plugin_notification::NotificationExt;
+  let filename = path
+    .file_name()
+    .map(|n| n.to_string_lossy().to_string())
+    .unwrap_or_else(|| "recording".to_string());
+  app.notification()
+    .builder()
+    .title("Recording saved")
+    .body(&filename)
+    .show()
+    .ok();
+}
+
+// -- Recording commands --
+
+#[derive(serde::Serialize)]
+pub struct RecordingResultDto {
+  pub filepath: Option<String>,
+  pub duration_secs: f64,
+  pub format: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct RecordingStateDto {
+  pub is_recording: bool,
+  pub elapsed_secs: f64,
+  pub format: String,
+}
+
+/// Toggle fullscreen recording on/off.
+/// If not recording: start recording the entire screen.
+/// If already recording: stop and save.
+#[tauri::command]
+pub async fn toggle_recording(app: AppHandle) -> Result<RecordingResultDto, AppError> {
+  let is_recording = app.state::<Mutex<AppState>>().lock_or_recover().is_recording;
+
+  if is_recording {
+    return stop_recording(app).await;
+  }
+
+  // Guard: can't record while capturing or annotating
+  let config = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    if state.is_capturing || state.is_annotating {
+      return Ok(RecordingResultDto { filepath: None, duration_secs: 0.0, format: String::new() });
+    }
+    state.config.clone()
+  };
+
+  let pipeline_config = build_pipeline_config(&config, None)?;
+  let handle = crate::recording::pipeline::start_pipeline(pipeline_config)?;
+
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_recording = true;
+    state.recording_region = None;
+    state.recording_start = Some(std::time::Instant::now());
+    state.recording_stop_signal = Some(handle.stop_signal.clone());
+    state.pipeline_handle = Some(handle);
+  }
+
+  tray::refresh_tray_menu(&app);
+
+  Ok(RecordingResultDto { filepath: None, duration_secs: 0.0, format: config.recording_format })
+}
+
+/// Start recording a specific region (called after overlay selection).
+#[tauri::command]
+pub async fn start_region_recording(
+  app: AppHandle,
+  x: u32,
+  y: u32,
+  width: u32,
+  height: u32,
+) -> Result<(), AppError> {
+  let config = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    if state.is_capturing || state.is_annotating || state.is_recording {
+      return Ok(());
+    }
+    state.config.clone()
+  };
+
+  let region = crate::recording::RecordingRegion { x, y, width, height };
+  let pipeline_config = build_pipeline_config(&config, Some(region.clone()))?;
+  let handle = crate::recording::pipeline::start_pipeline(pipeline_config)?;
+
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_recording = true;
+    state.recording_region = Some(region);
+    state.recording_start = Some(std::time::Instant::now());
+    state.recording_stop_signal = Some(handle.stop_signal.clone());
+    state.pipeline_handle = Some(handle);
+  }
+
+  tray::refresh_tray_menu(&app);
+
+  Ok(())
+}
+
+/// Stop the current recording and save the file.
+#[tauri::command]
+pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppError> {
+  let (was_recording, elapsed, format, pipeline) = {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    let was = state.is_recording;
+    let elapsed = state.recording_start
+      .map(|t| t.elapsed().as_secs_f64())
+      .unwrap_or(0.0);
+    let format = state.config.recording_format.clone();
+    let pipeline = state.pipeline_handle.take();
+
+    state.is_recording = false;
+    state.recording_stop_signal = None;
+    state.recording_region = None;
+    state.recording_start = None;
+    (was, elapsed, format, pipeline)
+  };
+
+  if !was_recording {
+    return Err(AppError::Recording("Not currently recording".to_string()));
+  }
+
+  tray::refresh_tray_menu(&app);
+
+  // Wait for pipeline to finish on a blocking thread (it joins two threads)
+  let output_path = if let Some(handle) = pipeline {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+      handle.stop_and_wait()
+    }).await.map_err(|e| AppError::Recording(format!("Pipeline join failed: {e}")))?;
+    match result {
+      Ok(path) => {
+        // Add to capture history
+        let s = app.state::<Mutex<AppState>>();
+        let mut state = s.lock_or_recover();
+        state.add_to_history(path.clone());
+        state.last_saved_path = Some(path.clone());
+        drop(state);
+        tray::refresh_tray_menu(&app);
+        notify_recording(&app, &path);
+        Some(path.to_string_lossy().to_string())
+      }
+      Err(e) => {
+        eprintln!("recording: pipeline error: {e}");
+        return Err(e);
+      }
+    }
+  } else {
+    None
+  };
+
+  Ok(RecordingResultDto {
+    filepath: output_path,
+    duration_secs: elapsed,
+    format,
+  })
+}
+
+/// Get current recording state (for the indicator window).
+#[tauri::command]
+pub fn get_recording_state(app: AppHandle) -> RecordingStateDto {
+  let s = app.state::<Mutex<AppState>>();
+  let state = s.lock_or_recover();
+  RecordingStateDto {
+    is_recording: state.is_recording,
+    elapsed_secs: state.recording_start
+      .map(|t| t.elapsed().as_secs_f64())
+      .unwrap_or(0.0),
+    format: state.config.recording_format.clone(),
+  }
 }

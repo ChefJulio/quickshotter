@@ -18,7 +18,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    if state.is_capturing || state.is_annotating {
+    if state.is_capturing || state.is_annotating || state.is_recording {
       return Ok(());
     }
     state.is_capturing = true;
@@ -42,7 +42,10 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
   // Freeze mode captures upfront for a frozen preview.
   // Window mode skips this -- it shows a transparent overlay and captures on click.
-  let needs_capture = mode == "freeze";
+  // On macOS, ALL modes pre-capture because hiding the overlay and recapturing
+  // has unreliable timing -- the compositor may not finish re-rendering windows
+  // within the delay, resulting in only the desktop background being captured.
+  let needs_capture = mode == "freeze" || cfg!(target_os = "macos");
 
   if needs_capture {
     let screen = match capture::capture_all_monitors() {
@@ -68,18 +71,24 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       return Ok(());
     }
 
-    let base64_data = match capture::image_to_base64(&screen.image) {
-      Ok(d) => d,
-      Err(e) => {
-        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-        return Err(e);
+    // Only generate base64 preview for freeze mode (it displays a frozen image).
+    // Instant/window modes on macOS just need the raw image for cropping later.
+    let base64_data = if mode == "freeze" {
+      match capture::image_to_base64(&screen.image) {
+        Ok(d) => Some(d),
+        Err(e) => {
+          app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+          return Err(e);
+        }
       }
+    } else {
+      None
     };
 
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.pending_screenshot = Some(screen.image);
-    state.pending_base64 = Some(base64_data);
+    state.pending_base64 = base64_data;
   }
 
   // Span overlay across the entire virtual desktop (all monitors)
