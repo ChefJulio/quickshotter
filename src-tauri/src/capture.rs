@@ -204,6 +204,26 @@ pub fn image_to_base64_png(img: &RgbaImage) -> Result<String, AppError> {
   Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
 }
 
+/// Check if the app has screen recording permission on macOS.
+/// Uses CGPreflightScreenCaptureAccess (macOS 10.15+) to check without prompting.
+#[cfg(target_os = "macos")]
+pub fn has_screen_recording_permission() -> bool {
+  extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+  }
+  unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+/// Request screen recording permission on macOS.
+/// Triggers the system permission dialog on first call.
+#[cfg(target_os = "macos")]
+pub fn request_screen_recording_permission() {
+  extern "C" {
+    fn CGRequestScreenCaptureAccess() -> bool;
+  }
+  unsafe { CGRequestScreenCaptureAccess(); }
+}
+
 /// Check if a captured image is likely blank (all black pixels).
 /// On macOS, this typically means screen recording permission was denied.
 #[cfg(target_os = "macos")]

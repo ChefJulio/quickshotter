@@ -122,9 +122,25 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
 }
 
 async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
+  // On macOS, check permission before attempting capture to avoid triggering
+  // the system dialog while also trying to capture.
+  #[cfg(target_os = "macos")]
+  if !capture::has_screen_recording_permission() {
+    capture::request_screen_recording_permission();
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+      .builder()
+      .title("Screen Recording Permission Required")
+      .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
+      .show()
+      .ok();
+    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
+  }
+
   let screen = capture::capture_all_monitors()?;
 
-  // Detect likely permission denial (black screenshot) on macOS
+  // Fallback: detect blank screenshot in case permission check passed but
+  // capture still returned empty (can happen after app updates on some macOS versions).
   #[cfg(target_os = "macos")]
   if capture::is_likely_blank(&screen.image) {
     use tauri_plugin_notification::NotificationExt;

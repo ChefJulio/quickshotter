@@ -1,6 +1,6 @@
 # QuickShotter
 
-A lightweight, cross-platform screenshot tool built with Tauri 2, Rust, and TypeScript. Lives in your system tray with no persistent window — all UI is transient and on-demand.
+A lightweight, cross-platform screenshot and screen recording tool built with Tauri 2, Rust, and TypeScript. Lives in your system tray with no persistent window — all UI is transient and on-demand.
 
 **Platforms:** Windows, macOS (Intel + Apple Silicon), Linux
 
@@ -8,7 +8,7 @@ A lightweight, cross-platform screenshot tool built with Tauri 2, Rust, and Type
 
 ## Features
 
-### Three Capture Modes
+### Screenshot Capture
 
 | Mode | Default Hotkey | Description |
 |------|---------------|-------------|
@@ -17,6 +17,18 @@ A lightweight, cross-platform screenshot tool built with Tauri 2, Rust, and Type
 | **Window** | `Ctrl+Alt+Shift+W` | Highlights and captures the window under your cursor |
 
 > On macOS, `Ctrl` is replaced with `Cmd` in all hotkeys.
+
+### Screen Recording
+
+| Format | Description |
+|--------|-------------|
+| **MP4** (H.264) | Hardware-accelerated via Media Foundation (Windows), VideoToolbox (macOS), or software fallback via openh264 |
+| **GIF** | Configurable max duration and max width, with automatic downscaling and color quantization |
+
+- **Record hotkey** for quick start/stop toggle
+- **Region recording** — select a screen area to record
+- Configurable frame rate (10/15/24/30 FPS)
+- GPU encoder auto-selection: NVENC, AMF, QuickSync, or D3D11 on Windows; VideoToolbox on macOS; CPU fallback on all platforms
 
 ### Overlay Modes
 
@@ -52,15 +64,20 @@ Annotations are composited at **full original resolution**, not display resoluti
 
 ### Settings
 
-Accessible from the system tray. Configurable options include:
+Accessible from the system tray, organized into tabbed panels:
 
-- Save folder with real-time writability validation
-- Hotkey bindings via inline key recorder (click to arm, press your combo)
-- Save format, filename prefix, and date format
-- Save-to-disk toggle
-- Capture mode (instant vs. freeze)
-- Annotation toggle and tool mappings for each modifier key
-- Launch on startup
+- **General** — save folder (with real-time writability validation), save format, filename prefix/date format, clipboard and save-to-disk toggles, capture mode (instant vs. freeze), launch on startup
+- **Shortcuts** — hotkey bindings via inline key recorder (click to arm, press your combo) for region, fullscreen, window, and record
+- **Recording** — format (MP4/GIF), frame rate, GIF max duration and max width
+- **Annotations** — annotation toggle and tool mappings for each modifier key
+- **About** — version display, in-app update checker
+
+### Auto-Updater
+
+- Check for updates directly from the About tab
+- Downloads and installs updates with progress tracking
+- Signed update bundles verified against a minisign public key
+- Restart prompt after install — no manual download needed
 
 ### System Tray
 
@@ -86,7 +103,7 @@ quickshotter/
 └── src-tauri/src/
     ├── main.rs                Entry point
     ├── lib.rs                 Tauri builder and plugin registration
-    ├── commands.rs            20 IPC commands
+    ├── commands.rs            IPC commands
     ├── capture.rs             Screenshot, clipboard, disk save
     ├── overlay.rs             Overlay window lifecycle
     ├── hotkeys.rs             Global shortcut registration
@@ -95,7 +112,17 @@ quickshotter/
     ├── window_capture.rs      Window detection worker thread
     ├── config.rs              Config struct and JSON persistence
     ├── state.rs               AppState with mutex poison recovery
-    └── error.rs               Unified AppError enum
+    ├── error.rs               Unified AppError enum
+    └── recording/
+        ├── mod.rs             Module exports and type re-exports
+        ├── pipeline.rs        Recording region, format, capture source
+        ├── encoder.rs         VideoEncoder trait, FallbackEncoder
+        ├── encoder_win.rs     Media Foundation H.264 (Windows)
+        ├── encoder_mac.rs     AVAssetWriter + VideoToolbox (macOS)
+        ├── avwriter.m         Objective-C FFI for VideoToolbox
+        ├── encoder_cpu.rs     openh264 software fallback
+        ├── mp4_muxer.rs       Minimal ISOBMFF MP4 container
+        └── gif_encoder.rs     GIF with downscaling and quantization
 ```
 
 **Design principles:**
@@ -203,7 +230,7 @@ GitHub Actions automatically builds on tag push (`v*`) for:
 | macOS Intel | DMG (x86_64) |
 | Linux | DEB + AppImage |
 
-Releases are auto-published with a download table.
+Releases are auto-published with a download table. Each release includes signed update bundles and a `latest.json` manifest for the in-app auto-updater.
 
 ---
 
@@ -224,10 +251,10 @@ All configuration changes are validated atomically before being persisted.
 ## Tech Stack
 
 **Backend (Rust):**
-tauri 2, image, arboard, xcap, chrono, base64, serde, thiserror, directories
+tauri 2, image, arboard, xcap, chrono, base64, serde, thiserror, directories, openh264, gif
 
 **Frontend (TypeScript):**
-@tauri-apps/api, @tauri-apps/plugin-global-shortcut, vite, typescript
+@tauri-apps/api, @tauri-apps/plugin-global-shortcut, @tauri-apps/plugin-updater, @tauri-apps/plugin-process, vite, typescript
 
 **Tauri Plugins:**
-single-instance, global-shortcut, dialog, notification, autostart
+single-instance, global-shortcut, dialog, notification, autostart, updater, process

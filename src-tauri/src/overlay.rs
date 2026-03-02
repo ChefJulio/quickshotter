@@ -25,6 +25,23 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     state.overlay_mode = mode.to_string();
   }
 
+  // On macOS, check screen recording permission BEFORE capturing or opening
+  // the overlay.  Without this gate the overlay and the system permission dialog
+  // appear simultaneously, which is confusing.
+  #[cfg(target_os = "macos")]
+  if !capture::has_screen_recording_permission() {
+    capture::request_screen_recording_permission();
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+      .builder()
+      .title("Screen Recording Permission Required")
+      .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
+      .show()
+      .ok();
+    app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+    return Ok(());
+  }
+
   // Get virtual desktop bounds (fast, no image capture)
   let bounds = match capture::get_desktop_bounds() {
     Ok(b) => b,

@@ -155,6 +155,13 @@ fn find_window_at(x: i32, y: i32, exclude_id: WindowId) -> Option<WindowRect> {
       continue;
     }
 
+    // Skip our own windows (overlay, settings, annotation, recording indicator).
+    // This is a fallback for when the ID-based exclusion fails -- on macOS the
+    // overlay ID lookup can miss due to title/timing differences.
+    if title.starts_with("QuickShotter") {
+      continue;
+    }
+
     let wx = match win.x() { Ok(v) => v, Err(_) => continue };
     let wy = match win.y() { Ok(v) => v, Err(_) => continue };
     let ww = match win.width() { Ok(v) => v as i32, Err(_) => continue };
