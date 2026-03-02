@@ -30,12 +30,15 @@ pub trait VideoEncoder: Send {
 /// Encoder that tries the platform GPU encoder first, falls back to CPU on failure.
 /// This handles cases where the GPU encoder compiles but fails at runtime
 /// (missing codecs, driver issues, ObjC bridging problems, etc.).
+/// Used on macOS (AVAssetWriter -> openh264 fallback). Windows MF has built-in fallback.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub struct FallbackEncoder {
     primary: Option<Box<dyn VideoEncoder>>,
     fallback: Option<Box<dyn VideoEncoder>>,
     active: Option<Box<dyn VideoEncoder>>,
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 impl FallbackEncoder {
     pub fn new(primary: Box<dyn VideoEncoder>, fallback: Box<dyn VideoEncoder>) -> Self {
         Self {
