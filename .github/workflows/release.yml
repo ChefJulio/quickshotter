@@ -92,3 +92,32 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  update-release-body:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Update release with download links
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+          gh release edit "$TAG" --repo "$REPO" --notes "$(cat <<EOF
+          ## Download
+
+          | Platform | Installer |
+          |----------|-----------|
+          | **Windows** (64-bit) | [QuickShotter_${VERSION}_x64-setup.exe](${BASE}/QuickShotter_${VERSION}_x64-setup.exe) |
+          | **macOS** (Apple Silicon) | [QuickShotter_${VERSION}_aarch64.dmg](${BASE}/QuickShotter_${VERSION}_aarch64.dmg) |
+          | **macOS** (Intel) | [QuickShotter_${VERSION}_x64.dmg](${BASE}/QuickShotter_${VERSION}_x64.dmg) |
+          | **Linux** (Debian/Ubuntu) | [QuickShotter_${VERSION}_amd64.deb](${BASE}/QuickShotter_${VERSION}_amd64.deb) |
+          | **Linux** (AppImage) | [QuickShotter_${VERSION}_amd64.AppImage](${BASE}/QuickShotter_${VERSION}_amd64.AppImage) |
+
+          Other files (\`.sig\`, \`.tar.gz\`, \`latest.json\`) are used by the built-in auto-updater.
+          EOF
+          )"
