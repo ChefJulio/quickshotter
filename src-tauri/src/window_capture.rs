@@ -79,22 +79,11 @@ pub type WindowId = u32;
 pub fn get_cursor_pos() -> Option<(i32, i32)> {
   use mouse_position::mouse_position::Mouse;
   match Mouse::get_mouse_position() {
-    Mouse::Position { x, y } => {
-      // On macOS, mouse_position returns Cocoa coordinates (y=0 at bottom
-      // of primary display), but xcap::Window uses CG coordinates (y=0 at
-      // top). Flip y so hit-testing matches the window positions.
-      #[cfg(target_os = "macos")]
-      {
-        let primary_h = xcap::Monitor::all()
-          .ok()
-          .and_then(|m| m.first().map(|mon| mon.height().unwrap_or(0) as i32))
-          .unwrap_or(0);
-        if primary_h > 0 {
-          return Some((x, primary_h - y));
-        }
-      }
-      Some((x, y))
-    }
+    // mouse_position uses CGEventGetLocation on macOS, which returns
+    // CG global display coordinates (y=0 at top of primary display,
+    // logical points).  xcap::Window also uses CG coordinates, so
+    // no coordinate conversion is needed on any platform.
+    Mouse::Position { x, y } => Some((x, y)),
     Mouse::Error => None,
   }
 }
