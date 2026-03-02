@@ -17,6 +17,8 @@ pub struct AppConfig {
   pub save_to_disk: bool,
   #[serde(default = "default_capture_mode")]
   pub capture_mode: String,
+  #[serde(default = "default_true")]
+  pub copy_to_clipboard: bool,
   #[serde(default)]
   pub annotate_captures: bool,
   #[serde(default = "default_shift_tool")]
@@ -31,6 +33,21 @@ pub struct AppConfig {
   pub filename_suffix: String,
   #[serde(default)]
   pub launch_on_startup: bool,
+  // Recording settings
+  #[serde(default = "default_hotkey_record")]
+  pub hotkey_record: String,
+  #[serde(default = "default_recording_format")]
+  pub recording_format: String,
+  #[serde(default = "default_recording_fps")]
+  pub recording_fps: u32,
+  #[serde(default = "default_gif_max_duration")]
+  pub gif_max_duration: u32,
+  #[serde(default = "default_gif_max_width")]
+  pub gif_max_width: u32,
+}
+
+fn default_true() -> bool {
+  true
 }
 
 fn default_annotate_default_tool() -> String {
@@ -47,6 +64,26 @@ fn default_capture_mode() -> String {
 
 fn default_hotkey_window() -> String {
   "CmdOrCtrl+Alt+Shift+W".to_string()
+}
+
+fn default_hotkey_record() -> String {
+  "CmdOrCtrl+Alt+Shift+R".to_string()
+}
+
+fn default_recording_format() -> String {
+  "mp4".to_string()
+}
+
+fn default_recording_fps() -> u32 {
+  30
+}
+
+fn default_gif_max_duration() -> u32 {
+  15
+}
+
+fn default_gif_max_width() -> u32 {
+  800
 }
 
 fn default_shift_tool() -> String {
@@ -71,6 +108,7 @@ impl Default for AppConfig {
       format: "png".to_string(),
       filename_prefix: "screenshot".to_string(),
       save_to_disk: true,
+      copy_to_clipboard: true,
       capture_mode: "instant".to_string(),
       annotate_captures: false,
       annotate_shift_tool: default_shift_tool(),
@@ -79,6 +117,11 @@ impl Default for AppConfig {
       annotate_default_tool: default_annotate_default_tool(),
       filename_suffix: default_filename_suffix(),
       launch_on_startup: false,
+      hotkey_record: default_hotkey_record(),
+      recording_format: default_recording_format(),
+      recording_fps: default_recording_fps(),
+      gif_max_duration: default_gif_max_duration(),
+      gif_max_width: default_gif_max_width(),
     }
   }
 }

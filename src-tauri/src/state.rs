@@ -1,9 +1,11 @@
 use image::RgbaImage;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::AtomicBool;
 
 use crate::config::AppConfig;
+use crate::recording::{RecordingRegion, pipeline::PipelineHandle};
 
 pub const MAX_HISTORY: usize = 5;
 
@@ -24,6 +26,12 @@ pub struct AppState {
   // Annotation: image waiting to be annotated
   pub pending_annotation: Option<RgbaImage>,
   pub pending_annotation_base64: Option<String>,
+  // Recording state
+  pub is_recording: bool,
+  pub recording_stop_signal: Option<Arc<AtomicBool>>,
+  pub recording_region: Option<RecordingRegion>,
+  pub recording_start: Option<std::time::Instant>,
+  pub pipeline_handle: Option<PipelineHandle>,
 }
 
 impl AppState {
@@ -40,6 +48,11 @@ impl AppState {
       overlay_window_id: 0,
       pending_annotation: None,
       pending_annotation_base64: None,
+      is_recording: false,
+      recording_stop_signal: None,
+      recording_region: None,
+      recording_start: None,
+      pipeline_handle: None,
     }
   }
 

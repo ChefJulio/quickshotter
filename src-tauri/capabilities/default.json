@@ -5,6 +5,7 @@
   "windows": ["settings", "overlay", "annotation"],
   "permissions": [
     "core:default",
+    "core:app:default",
     "core:window:allow-create",
     "core:window:allow-close",
     "core:window:allow-show",

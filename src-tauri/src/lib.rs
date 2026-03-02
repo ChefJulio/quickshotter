@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod hotkeys;
 mod overlay;
+mod recording;
 mod startup;
 mod state;
 mod tray;
@@ -42,6 +43,11 @@ pub fn run() {
       commands::save_annotated_capture,
       commands::cancel_annotation,
       commands::validate_save_folder,
+      commands::toggle_recording,
+      commands::stop_recording,
+      commands::start_region_recording,
+      commands::get_recording_state,
+      commands::reveal_file,
     ])
     .setup(|app| {
       let config = config::load_config(&app.handle());

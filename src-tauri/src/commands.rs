@@ -57,9 +57,14 @@ pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
 /// send a desktop notification.  Called from every capture path to avoid
 /// duplicating this pipeline.
 fn finalize_capture(app: &AppHandle, img: &RgbaImage) -> Result<CaptureResultDto, AppError> {
-  capture::copy_to_clipboard(img)?;
-
   let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+
+  let copied = if config.copy_to_clipboard {
+    capture::copy_to_clipboard(img)?;
+    true
+  } else {
+    false
+  };
 
   let saved = capture::save_to_disk(img, &config)?;
   let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
@@ -76,7 +81,7 @@ fn finalize_capture(app: &AppHandle, img: &RgbaImage) -> Result<CaptureResultDto
 
   Ok(CaptureResultDto {
     filepath: filepath_str,
-    copied_to_clipboard: true,
+    copied_to_clipboard: copied,
   })
 }
 
@@ -148,13 +153,16 @@ pub async fn complete_region_capture(
   y1: u32,
   x2: u32,
   y2: u32,
+  force_annotate: Option<bool>,
 ) -> Result<CaptureResultDto, AppError> {
+  let force_annotate = force_annotate.unwrap_or(false);
+
   // Hide overlay immediately (don't destroy -- we're still inside its webview command)
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
 
-  let result = complete_region_capture_inner(&app, x1, y1, x2, y2).await;
+  let result = complete_region_capture_inner(&app, x1, y1, x2, y2, force_annotate).await;
 
   // Always close overlay to avoid leaking the window.
   // Safe to call even if inner function already closed it (idempotent).
@@ -170,6 +178,7 @@ async fn complete_region_capture_inner(
   y1: u32,
   x2: u32,
   y2: u32,
+  force_annotate: bool,
 ) -> Result<CaptureResultDto, AppError> {
   let left = x1.min(x2);
   let top = y1.min(y2);
@@ -204,8 +213,9 @@ async fn complete_region_capture_inner(
     safe_crop(&screen.image, left, top, w, h)?
   };
 
-  // Check if we should open annotation editor
-  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
+  // Check if we should open annotation editor (config setting or shift-key override)
+  let annotate = force_annotate
+    || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
     return open_annotation_for_image(app, image).await;
@@ -230,13 +240,16 @@ pub async fn complete_window_capture(
   top: i32,
   right: i32,
   bottom: i32,
+  force_annotate: Option<bool>,
 ) -> Result<CaptureResultDto, AppError> {
+  let force_annotate = force_annotate.unwrap_or(false);
+
   // Hide overlay immediately
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
 
-  let result = complete_window_capture_inner(&app, left, top, right, bottom).await;
+  let result = complete_window_capture_inner(&app, left, top, right, bottom, force_annotate).await;
 
   // Always close overlay to avoid leaking the window.
   // Safe to call even if already closed (idempotent).
@@ -252,6 +265,7 @@ async fn complete_window_capture_inner(
   top: i32,
   right: i32,
   bottom: i32,
+  force_annotate: bool,
 ) -> Result<CaptureResultDto, AppError> {
   if right <= left || bottom <= top {
     return Err(AppError::Capture("Invalid window bounds".to_string()));
@@ -302,8 +316,9 @@ async fn complete_window_capture_inner(
     safe_crop(&screen.image, crop_x, crop_y, w, h)?
   };
 
-  // Check if we should open annotation editor
-  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
+  // Check if we should open annotation editor (config setting or shift-key override)
+  let annotate = force_annotate
+    || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
     return open_annotation_for_image(app, image).await;
@@ -459,6 +474,18 @@ pub async fn save_config(
     other => return Err(AppError::Config(format!("Invalid recording FPS: {other}"))),
   }
 
+  // Validate GIF settings
+  if new_config.gif_max_width < 100 || new_config.gif_max_width > 3840 {
+    return Err(AppError::Config(format!(
+      "GIF max width must be 100-3840, got {}", new_config.gif_max_width
+    )));
+  }
+  if new_config.gif_max_duration > 120 {
+    return Err(AppError::Config(format!(
+      "GIF max duration must be 0-120s, got {}", new_config.gif_max_duration
+    )));
+  }
+
   // Validate filename_suffix as a chrono format string
   let has_bad_format = chrono::format::strftime::StrftimeItems::new(&new_config.filename_suffix)
     .any(|item| matches!(item, chrono::format::Item::Error));
@@ -466,18 +493,34 @@ pub async fn save_config(
     return Err(AppError::Config("Invalid date format in filename suffix".to_string()));
   }
 
-  // Validate hotkeys before persisting -- avoids saving config with broken hotkeys
-  hotkeys::reload_hotkeys_with_config(&app, &new_config)
-    .map_err(|e| AppError::Config(e.to_string()))?;
+  // Compare with current config to avoid unnecessary side effects during
+  // real-time auto-save (hotkey re-registration, startup toggle, etc.).
+  let old_config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+
+  let hotkeys_changed = old_config.hotkey_region != new_config.hotkey_region
+    || old_config.hotkey_fullscreen != new_config.hotkey_fullscreen
+    || old_config.hotkey_window != new_config.hotkey_window
+    || old_config.hotkey_record != new_config.hotkey_record;
+
+  // Only reload hotkeys when they actually changed -- avoids briefly
+  // unregistering all global hotkeys on every unrelated settings tweak.
+  if hotkeys_changed {
+    hotkeys::reload_hotkeys_with_config(&app, &new_config)
+      .map_err(|e| AppError::Config(e.to_string()))?;
+  }
 
   // All validation passed -- now create directory (side-effect only on success path)
-  let folder = std::path::PathBuf::from(&new_config.save_folder);
-  std::fs::create_dir_all(&folder)?;
+  if old_config.save_folder != new_config.save_folder {
+    let folder = std::path::PathBuf::from(&new_config.save_folder);
+    std::fs::create_dir_all(&folder)?;
+  }
 
   app.state::<Mutex<AppState>>().lock_or_recover().config = new_config.clone();
   config::save_config(&app, &new_config)?;
 
-  crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
+  if old_config.launch_on_startup != new_config.launch_on_startup {
+    crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
+  }
   tray::refresh_tray_menu(&app);
 
   Ok(())
@@ -544,7 +587,7 @@ pub fn show_settings_window(app: &AppHandle) {
   } else {
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
       .title("QuickShotter Settings")
-      .inner_size(480.0, 800.0)
+      .inner_size(480.0, 620.0)
       .resizable(false)
       .center()
       .always_on_top(true)
@@ -567,19 +610,48 @@ fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
     None => ("Screenshot captured".to_string(), "Copied to clipboard".to_string()),
   };
 
-  app.notification()
+  let mut builder = app.notification()
     .builder()
     .title(&title)
-    .body(&body)
-    .show()
-    .ok();
+    .body(&body);
+  if let Some(fp) = filepath {
+    builder = builder.extra("filepath", fp);
+  }
+  builder.show().ok();
 }
 
 // -- Recording helpers --
 
+fn open_recording_indicator(app: &AppHandle, pos: Option<(f64, f64)>) {
+  if app.get_webview_window("recording-indicator").is_some() {
+    return;
+  }
+  let mut builder = WebviewWindowBuilder::new(app, "recording-indicator", WebviewUrl::App("recording-indicator.html".into()))
+    .title("Recording")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .resizable(false)
+    .inner_size(340.0, 36.0)
+    .skip_taskbar(true);
+  if let Some((x, y)) = pos {
+    // Position above the recording region's top-left corner
+    builder = builder.position(x, (y - 42.0).max(0.0));
+  }
+  builder.build().ok();
+}
+
+fn close_recording_indicator(app: &AppHandle) {
+  if let Some(win) = app.get_webview_window("recording-indicator") {
+    win.destroy().ok();
+  }
+}
+
 fn build_pipeline_config(
   config: &crate::config::AppConfig,
   region: Option<crate::recording::RecordingRegion>,
+  capture_source: crate::recording::CaptureSource,
 ) -> Result<crate::recording::PipelineConfig, AppError> {
   let format = match config.recording_format.as_str() {
     "gif" => crate::recording::RecordingFormat::Gif,
@@ -605,6 +677,7 @@ fn build_pipeline_config(
     output_path,
     gif_max_duration_secs: config.gif_max_duration,
     gif_max_width: config.gif_max_width,
+    capture_source,
   })
 }
 
@@ -618,8 +691,18 @@ fn notify_recording(app: &AppHandle, path: &std::path::Path) {
     .builder()
     .title("Recording saved")
     .body(&filename)
+    .extra("filepath", path.to_string_lossy().to_string())
     .show()
     .ok();
+}
+
+/// Reveal a file in the system file explorer.
+#[tauri::command]
+pub fn reveal_file(path: String) {
+  let p = std::path::PathBuf::from(&path);
+  if p.exists() {
+    tray::open_in_explorer(&p);
+  }
 }
 
 // -- Recording commands --
@@ -636,6 +719,7 @@ pub struct RecordingStateDto {
   pub is_recording: bool,
   pub elapsed_secs: f64,
   pub format: String,
+  pub saved_filepath: Option<String>,
 }
 
 /// Toggle fullscreen recording on/off.
@@ -659,7 +743,7 @@ pub async fn toggle_recording(app: AppHandle) -> Result<RecordingResultDto, AppE
     state.config.clone()
   };
 
-  let pipeline_config = build_pipeline_config(&config, None)?;
+  let pipeline_config = build_pipeline_config(&config, None, crate::recording::CaptureSource::SingleMonitor(0))?;
   let handle = crate::recording::pipeline::start_pipeline(pipeline_config)?;
 
   {
@@ -673,11 +757,12 @@ pub async fn toggle_recording(app: AppHandle) -> Result<RecordingResultDto, AppE
   }
 
   tray::refresh_tray_menu(&app);
+  open_recording_indicator(&app, None);
 
   Ok(RecordingResultDto { filepath: None, duration_secs: 0.0, format: config.recording_format })
 }
 
-/// Start recording a specific region (called after overlay selection).
+/// Start recording a specific region (called from overlay while it's still open).
 #[tauri::command]
 pub async fn start_region_recording(
   app: AppHandle,
@@ -685,24 +770,94 @@ pub async fn start_region_recording(
   y: u32,
   width: u32,
   height: u32,
+  indicator_x: Option<f64>,
+  indicator_y: Option<f64>,
 ) -> Result<(), AppError> {
   let config = {
     let s = app.state::<Mutex<AppState>>();
-    let state = s.lock_or_recover();
-    if state.is_capturing || state.is_annotating || state.is_recording {
+    let mut state = s.lock_or_recover();
+    if state.is_annotating || state.is_recording {
       return Ok(());
     }
+    // Set recording flag early to prevent duplicate starts from rapid calls.
+    // Cleared on error below.
+    state.is_recording = true;
+    // Clear capturing flag: overlay stays open but transitions to recording boundary mode
+    state.is_capturing = false;
     state.config.clone()
   };
 
-  let region = crate::recording::RecordingRegion { x, y, width, height };
-  let pipeline_config = build_pipeline_config(&config, Some(region.clone()))?;
-  let handle = crate::recording::pipeline::start_pipeline(pipeline_config)?;
+  // The overlay spans the full virtual desktop, so (x, y) are physical pixel
+  // offsets from the overlay's top-left corner (= desktop bounds origin).
+  // Convert to absolute desktop coords, find which monitor the selection fits
+  // in, or use multi-monitor capture if it crosses boundaries.
+  let bounds = capture::get_desktop_bounds()?;
+  let monitors = xcap::Monitor::all().map_err(|e| AppError::Recording(format!("Failed to enumerate monitors: {e}")))?;
+  if monitors.is_empty() {
+    return Err(AppError::Recording("No monitors found".to_string()));
+  }
+
+  // Absolute desktop position of selection
+  let abs_x = x as i32 + bounds.x;
+  let abs_y = y as i32 + bounds.y;
+  let abs_r = abs_x + width as i32;
+  let abs_b = abs_y + height as i32;
+
+  // Check if the selection fits entirely within any single monitor
+  let mut single_monitor: Option<usize> = None;
+  for (i, m) in monitors.iter().enumerate() {
+    let mx = m.x().unwrap_or(0);
+    let my = m.y().unwrap_or(0);
+    let mw = m.width().unwrap_or(0) as i32;
+    let mh = m.height().unwrap_or(0) as i32;
+    if abs_x >= mx && abs_y >= my && abs_r <= mx + mw && abs_b <= my + mh {
+      single_monitor = Some(i);
+      break;
+    }
+  }
+
+  let (region, capture_source) = if let Some(idx) = single_monitor {
+    // Selection fits in one monitor -- use fast single-monitor capture
+    let mon = &monitors[idx];
+    let mon_x = mon.x().unwrap_or(0);
+    let mon_y = mon.y().unwrap_or(0);
+    let adj_x = (abs_x - mon_x).max(0) as u32;
+    let adj_y = (abs_y - mon_y).max(0) as u32;
+    eprintln!("recording: single-monitor[{}] overlay=({},{} {}x{}) adjusted=({},{})",
+      idx, x, y, width, height, adj_x, adj_y);
+    (
+      crate::recording::RecordingRegion { x: adj_x, y: adj_y, width, height },
+      crate::recording::CaptureSource::SingleMonitor(idx),
+    )
+  } else {
+    // Selection crosses monitors -- use multi-monitor capture.
+    // Region coords stay overlay-relative (= desktop-origin-relative).
+    eprintln!("recording: cross-monitor overlay=({},{} {}x{}) abs=({},{} -> {},{})",
+      x, y, width, height, abs_x, abs_y, abs_r, abs_b);
+    (
+      crate::recording::RecordingRegion { x, y, width, height },
+      crate::recording::CaptureSource::FullDesktop,
+    )
+  };
+
+  let pipeline_config = match build_pipeline_config(&config, Some(region.clone()), capture_source) {
+    Ok(c) => c,
+    Err(e) => {
+      app.state::<Mutex<AppState>>().lock_or_recover().is_recording = false;
+      return Err(e);
+    }
+  };
+  let handle = match crate::recording::pipeline::start_pipeline(pipeline_config) {
+    Ok(h) => h,
+    Err(e) => {
+      app.state::<Mutex<AppState>>().lock_or_recover().is_recording = false;
+      return Err(e);
+    }
+  };
 
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    state.is_recording = true;
     state.recording_region = Some(region);
     state.recording_start = Some(std::time::Instant::now());
     state.recording_stop_signal = Some(handle.stop_signal.clone());
@@ -711,13 +866,22 @@ pub async fn start_region_recording(
 
   tray::refresh_tray_menu(&app);
 
+  // Position indicator at the top-left of the selection region.
+  // indicator_x/Y are CSS pixel offsets within the overlay, which starts
+  // at the desktop bounds origin.
+  let indicator_pos = match (indicator_x, indicator_y) {
+    (Some(ix), Some(iy)) => Some((bounds.x as f64 + ix, bounds.y as f64 + iy)),
+    _ => None,
+  };
+  open_recording_indicator(&app, indicator_pos);
+
   Ok(())
 }
 
 /// Stop the current recording and save the file.
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppError> {
-  let (was_recording, elapsed, format, pipeline) = {
+  let (was_recording, elapsed, format, pipeline, copy_to_clip) = {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     let was = state.is_recording;
@@ -726,27 +890,36 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
       .unwrap_or(0.0);
     let format = state.config.recording_format.clone();
     let pipeline = state.pipeline_handle.take();
+    let copy_clip = state.config.copy_to_clipboard;
 
     state.is_recording = false;
     state.recording_stop_signal = None;
     state.recording_region = None;
     state.recording_start = None;
-    (was, elapsed, format, pipeline)
+    (was, elapsed, format, pipeline, copy_clip)
   };
 
   if !was_recording {
     return Err(AppError::Recording("Not currently recording".to_string()));
   }
 
+  // Close recording boundary overlay if it's still open
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.destroy().ok();
+  }
   tray::refresh_tray_menu(&app);
 
-  // Wait for pipeline to finish on a blocking thread (it joins two threads)
+  // Wait for pipeline to finish on a blocking thread (it joins two threads).
+  // The indicator window auto-closes via polling (sees is_recording=false).
   let output_path = if let Some(handle) = pipeline {
     let result = tauri::async_runtime::spawn_blocking(move || {
       handle.stop_and_wait()
     }).await.map_err(|e| AppError::Recording(format!("Pipeline join failed: {e}")))?;
     match result {
       Ok(path) => {
+        let exists = path.exists();
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        eprintln!("recording: stop_and_wait returned path={:?} exists={} size={}", path, exists, size);
         // Add to capture history
         let s = app.state::<Mutex<AppState>>();
         let mut state = s.lock_or_recover();
@@ -754,17 +927,35 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
         state.last_saved_path = Some(path.clone());
         drop(state);
         tray::refresh_tray_menu(&app);
+        // Copy recording file to clipboard (like Ctrl+C on a file)
+        if copy_to_clip {
+          if let Err(e) = capture::copy_file_to_clipboard(&path) {
+            eprintln!("Failed to copy recording to clipboard: {e}");
+          }
+        }
         notify_recording(&app, &path);
         Some(path.to_string_lossy().to_string())
       }
       Err(e) => {
         eprintln!("recording: pipeline error: {e}");
+        // Still clean up windows on error
+        close_recording_indicator(&app);
         return Err(e);
       }
     }
   } else {
     None
   };
+
+  // The indicator manages its own lifecycle (shows "Saved" for ~4s then destroys).
+  // Safety net: if JS fails to close it, Rust cleans up after 6s.
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move {
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+      std::thread::sleep(std::time::Duration::from_secs(6));
+    }).await;
+    close_recording_indicator(&app2);
+  });
 
   Ok(RecordingResultDto {
     filepath: output_path,
@@ -778,11 +969,17 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
 pub fn get_recording_state(app: AppHandle) -> RecordingStateDto {
   let s = app.state::<Mutex<AppState>>();
   let state = s.lock_or_recover();
+  let saved = if !state.is_recording {
+    state.last_saved_path.as_ref().map(|p| p.to_string_lossy().to_string())
+  } else {
+    None
+  };
   RecordingStateDto {
     is_recording: state.is_recording,
     elapsed_secs: state.recording_start
       .map(|t| t.elapsed().as_secs_f64())
       .unwrap_or(0.0),
     format: state.config.recording_format.clone(),
+    saved_filepath: saved,
   }
 }

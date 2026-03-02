@@ -87,9 +87,13 @@ let toolbarDragPos: { x: number; y: number } | null = null;
 
 // -- Coordinate transforms --
 
+function cssWidth() { return canvas.width / (window.devicePixelRatio || 1); }
+function cssHeight() { return canvas.height / (window.devicePixelRatio || 1); }
+
 function computeLayout() {
-  const sw = canvas.width;
-  const sh = canvas.height;
+  // Use CSS dimensions (not backing-store pixels) since ctx.scale(dpr) is applied
+  const sw = cssWidth();
+  const sh = cssHeight();
   const iw = sourceImage.naturalWidth;
   const ih = sourceImage.naturalHeight;
   if (iw <= 0 || ih <= 0) {
@@ -126,11 +130,13 @@ function clampToImage(screenX: number, screenY: number): Point {
 // -- Rendering --
 
 function render() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const cw = cssWidth();
+  const ch = cssHeight();
+  ctx.clearRect(0, 0, cw, ch);
 
   // Dark background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, cw, ch);
 
   // Draw image at display size
   ctx.drawImage(sourceImage, imageRect.x, imageRect.y, imageRect.w, imageRect.h);
@@ -371,19 +377,23 @@ function onMouseDown(e: MouseEvent) {
   const pos = toImageCoords(e.clientX, e.clientY);
   if (!pos) return;
 
+  // Allow dragging existing text annotations regardless of the active tool.
+  // This way text placed via a modifier key (e.g. Alt) can still be repositioned
+  // without switching to the text tool first.
+  const hitIdx = hitTestText(pos);
+  if (hitIdx !== null) {
+    const ann = undoStack[hitIdx] as TextAnnotation;
+    draggingTextIdx = hitIdx;
+    textDragOffset = { x: ann.position.x - pos.x, y: ann.position.y - pos.y };
+    textDragOriginalPos = { ...ann.position };
+    isDrawing = true;
+    return;
+  }
+
   const tool = toolFromModifiers(e);
 
-  // Text tool: drag existing or place new
+  // Text tool: place new (hit test above didn't match an existing annotation)
   if (tool === 'text') {
-    const hitIdx = hitTestText(pos);
-    if (hitIdx !== null) {
-      const ann = undoStack[hitIdx] as TextAnnotation;
-      draggingTextIdx = hitIdx;
-      textDragOffset = { x: ann.position.x - pos.x, y: ann.position.y - pos.y };
-      textDragOriginalPos = { ...ann.position };
-      isDrawing = true;
-      return;
-    }
     placeTextInput(e.clientX, e.clientY, pos);
     return;
   }
@@ -728,8 +738,16 @@ document.addEventListener('mouseup', () => {
 window.addEventListener('DOMContentLoaded', async () => {
   canvas = document.getElementById('annotation-canvas') as HTMLCanvasElement;
   ctx = canvas.getContext('2d')!;
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+
+  // Scale canvas backing store for Retina/HiDPI displays.
+  // CSS size stays at window dimensions; backing store is multiplied by DPR
+  // so drawings render at native resolution instead of blurry 1x.
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  ctx.scale(dpr, dpr);
 
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('mousemove', onMouseMove);

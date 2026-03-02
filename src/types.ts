@@ -6,6 +6,7 @@ export interface AppConfig {
   format: 'jpg' | 'png' | 'webp';
   filename_prefix: string;
   save_to_disk: boolean;
+  copy_to_clipboard: boolean;
   capture_mode: 'instant' | 'freeze' | 'window';
   annotate_captures: boolean;
   annotate_shift_tool: string;
@@ -14,6 +15,11 @@ export interface AppConfig {
   annotate_default_tool: string;
   filename_suffix: string;
   launch_on_startup: boolean;
+  hotkey_record: string;
+  recording_format: 'mp4' | 'gif';
+  recording_fps: number;
+  gif_max_duration: number;
+  gif_max_width: number;
 }
 
 export interface CaptureResult {

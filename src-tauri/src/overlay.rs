@@ -154,15 +154,25 @@ pub fn close_overlay(app: &AppHandle) {
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
   // Use explicit position + size instead of .fullscreen(true) to avoid
   // macOS native fullscreen animation (slides into a new Space).
-  let bounds = capture::get_desktop_bounds()?;
+  // Position on the primary monitor (not the full virtual desktop, which
+  // would span multiple monitors and split the editor across them).
+  let (x, y, w, h) = if let Ok(Some(monitor)) = app.primary_monitor() {
+    let pos = monitor.position();
+    let size = monitor.size();
+    (pos.x as f64, pos.y as f64, size.width as f64, size.height as f64)
+  } else {
+    // Fallback: full desktop bounds
+    let bounds = capture::get_desktop_bounds()?;
+    (bounds.x as f64, bounds.y as f64, bounds.width as f64, bounds.height as f64)
+  };
   WebviewWindowBuilder::new(app, "annotation", WebviewUrl::App("annotation.html".into()))
     .title("QuickShotter - Annotate")
     .decorations(false)
     .shadow(false)
     .always_on_top(true)
     .resizable(false)
-    .position(bounds.x as f64, bounds.y as f64)
-    .inner_size(bounds.width as f64, bounds.height as f64)
+    .position(x, y)
+    .inner_size(w, h)
     .visible(false)
     .skip_taskbar(true)
     .build()?;

@@ -1,11 +1,20 @@
-import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke, addPluginListener } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import type { AppConfig } from './types';
+
+// Listen for notification clicks to reveal files in Explorer
+addPluginListener('notification', 'actionPerformed', (event: any) => {
+  const filepath = event?.extra?.filepath ?? event?.notification?.extra?.filepath;
+  if (filepath) {
+    invoke('reveal_file', { path: filepath }).catch(() => {});
+  }
+}).catch(() => {});
 
 let folderInput: HTMLInputElement;
 let formatSelect: HTMLSelectElement;
 let prefixInput: HTMLInputElement;
 let suffixInput: HTMLInputElement;
+let copyToClipboardCheckbox: HTMLInputElement;
 let saveToDiskCheckbox: HTMLInputElement;
 let captureModeSelect: HTMLSelectElement;
 let annotateCapturesCheckbox: HTMLInputElement;
@@ -34,7 +43,7 @@ function formatHotkeyDisplay(raw: string): string {
     .join(' + ');
 }
 
-function initHotkeyRecorder(input: HTMLInputElement, initialValue: string): HotkeyState {
+function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onComplete?: () => void): HotkeyState {
   const state: HotkeyState = { input, rawValue: initialValue, recording: false };
   input.value = formatHotkeyDisplay(initialValue);
 
@@ -87,6 +96,7 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string): Hotk
     input.value = formatHotkeyDisplay(state.rawValue);
     input.classList.remove('recording');
     input.blur();
+    onComplete?.();
   });
 
   return state;
@@ -138,14 +148,46 @@ async function validateFolder() {
   }
 }
 
-// -- Config load/save --
+// -- Auto-save config --
 
 let regionHotkey: HotkeyState;
 let fullscreenHotkey: HotkeyState;
 let windowHotkey: HotkeyState;
+let recordHotkey: HotkeyState;
+let recordingFormatSelect: HTMLSelectElement;
+let recordingFpsSelect: HTMLSelectElement;
+let gifMaxDurationInput: HTMLInputElement;
+let gifMaxWidthInput: HTMLInputElement;
 
-async function loadConfig() {
-  const config: AppConfig = await invoke('get_config');
+let lastSavedConfig: AppConfig | null = null;
+
+function collectConfig(): AppConfig {
+  return {
+    save_folder: folderInput.value,
+    hotkey_region: regionHotkey.rawValue,
+    hotkey_fullscreen: fullscreenHotkey.rawValue,
+    hotkey_window: windowHotkey.rawValue,
+    format: formatSelect.value as AppConfig['format'],
+    filename_prefix: prefixInput.value,
+    filename_suffix: suffixInput.value,
+    copy_to_clipboard: copyToClipboardCheckbox.checked,
+    save_to_disk: saveToDiskCheckbox.checked,
+    capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
+    annotate_captures: annotateCapturesCheckbox.checked,
+    annotate_default_tool: modDefaultSelect.value,
+    annotate_shift_tool: modShiftSelect.value,
+    annotate_ctrl_tool: modCtrlSelect.value,
+    annotate_alt_tool: modAltSelect.value,
+    launch_on_startup: launchOnStartupCheckbox.checked,
+    hotkey_record: recordHotkey.rawValue,
+    recording_format: recordingFormatSelect.value as AppConfig['recording_format'],
+    recording_fps: parseInt(recordingFpsSelect.value, 10),
+    gif_max_duration: parseInt(gifMaxDurationInput.value, 10) || 15,
+    gif_max_width: parseInt(gifMaxWidthInput.value, 10) || 800,
+  };
+}
+
+function applyConfig(config: AppConfig) {
   folderInput.value = config.save_folder;
   regionHotkey.rawValue = config.hotkey_region;
   regionHotkey.input.value = formatHotkeyDisplay(config.hotkey_region);
@@ -156,6 +198,7 @@ async function loadConfig() {
   formatSelect.value = config.format;
   prefixInput.value = config.filename_prefix;
   suffixInput.value = config.filename_suffix;
+  copyToClipboardCheckbox.checked = config.copy_to_clipboard;
   saveToDiskCheckbox.checked = config.save_to_disk;
   captureModeSelect.value = config.capture_mode;
   annotateCapturesCheckbox.checked = config.annotate_captures;
@@ -164,37 +207,38 @@ async function loadConfig() {
   modCtrlSelect.value = config.annotate_ctrl_tool;
   modAltSelect.value = config.annotate_alt_tool;
   launchOnStartupCheckbox.checked = config.launch_on_startup;
-  validateFolder();
+  recordHotkey.rawValue = config.hotkey_record;
+  recordHotkey.input.value = formatHotkeyDisplay(config.hotkey_record);
+  recordingFormatSelect.value = config.recording_format;
+  recordingFpsSelect.value = String(config.recording_fps);
+  gifMaxDurationInput.value = String(config.gif_max_duration);
+  gifMaxWidthInput.value = String(config.gif_max_width);
 }
 
-async function saveConfig() {
-  const config: AppConfig = {
-    save_folder: folderInput.value,
-    hotkey_region: regionHotkey.rawValue,
-    hotkey_fullscreen: fullscreenHotkey.rawValue,
-    hotkey_window: windowHotkey.rawValue,
-    format: formatSelect.value as AppConfig['format'],
-    filename_prefix: prefixInput.value,
-    filename_suffix: suffixInput.value,
-    save_to_disk: saveToDiskCheckbox.checked,
-    capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
-    annotate_captures: annotateCapturesCheckbox.checked,
-    annotate_default_tool: modDefaultSelect.value,
-    annotate_shift_tool: modShiftSelect.value,
-    annotate_ctrl_tool: modCtrlSelect.value,
-    annotate_alt_tool: modAltSelect.value,
-    launch_on_startup: launchOnStartupCheckbox.checked,
-  };
-
+async function autoSave() {
+  const config = collectConfig();
   const saveError = document.getElementById('save-error')!;
   try {
-    saveError.style.display = 'none';
     await invoke('save_config', { newConfig: config });
-    getCurrentWindow().close();
+    lastSavedConfig = config;
+    saveError.style.display = 'none';
   } catch (e) {
-    saveError.textContent = `Failed to save: ${e}`;
+    saveError.textContent = String(e);
     saveError.style.display = 'block';
+    // Revert UI to last known good config so the user sees what's actually persisted.
+    // Programmatic .value/.checked sets don't fire change events, so no recursive save.
+    if (lastSavedConfig) applyConfig(lastSavedConfig);
   }
+}
+
+
+// -- Init --
+
+async function loadConfig() {
+  const config: AppConfig = await invoke('get_config');
+  applyConfig(config);
+  lastSavedConfig = config;
+  validateFolder();
 }
 
 async function browseSaveFolder() {
@@ -202,6 +246,7 @@ async function browseSaveFolder() {
   if (folder) {
     folderInput.value = folder;
     validateFolder();
+    autoSave();
   }
 }
 
@@ -213,6 +258,7 @@ window.addEventListener('DOMContentLoaded', () => {
   formatSelect = document.getElementById('format') as HTMLSelectElement;
   prefixInput = document.getElementById('filename-prefix') as HTMLInputElement;
   suffixInput = document.getElementById('filename-suffix') as HTMLInputElement;
+  copyToClipboardCheckbox = document.getElementById('copy-to-clipboard') as HTMLInputElement;
   saveToDiskCheckbox = document.getElementById('save-to-disk') as HTMLInputElement;
   captureModeSelect = document.getElementById('capture-mode') as HTMLSelectElement;
   annotateCapturesCheckbox = document.getElementById('annotate-captures') as HTMLInputElement;
@@ -222,13 +268,38 @@ window.addEventListener('DOMContentLoaded', () => {
   modAltSelect = document.getElementById('mod-alt') as HTMLSelectElement;
   launchOnStartupCheckbox = document.getElementById('launch-on-startup') as HTMLInputElement;
   folderWarning = document.getElementById('folder-warning') as HTMLSpanElement;
+  const recordHotkeyInput = document.getElementById('hotkey-record') as HTMLInputElement;
+  recordingFormatSelect = document.getElementById('recording-format') as HTMLSelectElement;
+  recordingFpsSelect = document.getElementById('recording-fps') as HTMLSelectElement;
+  gifMaxDurationInput = document.getElementById('gif-max-duration') as HTMLInputElement;
+  gifMaxWidthInput = document.getElementById('gif-max-width') as HTMLInputElement;
 
-  // Init hotkey recorders
-  regionHotkey = initHotkeyRecorder(regionHotkeyInput, '');
-  fullscreenHotkey = initHotkeyRecorder(fullscreenHotkeyInput, '');
-  windowHotkey = initHotkeyRecorder(windowHotkeyInput, '');
+  // Init hotkey recorders -- autoSave on recording complete
+  regionHotkey = initHotkeyRecorder(regionHotkeyInput, '', autoSave);
+  fullscreenHotkey = initHotkeyRecorder(fullscreenHotkeyInput, '', autoSave);
+  windowHotkey = initHotkeyRecorder(windowHotkeyInput, '', autoSave);
+  recordHotkey = initHotkeyRecorder(recordHotkeyInput, '', autoSave);
 
-  // Folder validation on edit -- debounced to avoid excessive IPC calls while typing
+  // Checkboxes and selects: save immediately on change
+  const immediateElements = [
+    formatSelect, captureModeSelect, copyToClipboardCheckbox, saveToDiskCheckbox,
+    annotateCapturesCheckbox, launchOnStartupCheckbox,
+    modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
+    recordingFormatSelect, recordingFpsSelect,
+  ];
+  for (const el of immediateElements) {
+    el.addEventListener('change', autoSave);
+  }
+
+  // Text/number inputs: save on blur only (change event) to avoid reverting
+  // the field mid-typing when an intermediate value fails validation
+  // (e.g., typing "%Y-" before finishing "%Y-%m-%d_%H-%M-%S").
+  const textElements = [folderInput, prefixInput, suffixInput, gifMaxDurationInput, gifMaxWidthInput];
+  for (const el of textElements) {
+    el.addEventListener('change', autoSave);
+  }
+
+  // Folder validation on edit (debounced separately for the warning display)
   let folderValidateTimer: ReturnType<typeof setTimeout>;
   folderInput.addEventListener('input', () => {
     clearTimeout(folderValidateTimer);
@@ -237,8 +308,25 @@ window.addEventListener('DOMContentLoaded', () => {
   folderInput.addEventListener('change', validateFolder);
 
   document.getElementById('browse-btn')!.addEventListener('click', browseSaveFolder);
-  document.getElementById('save-btn')!.addEventListener('click', saveConfig);
-  document.getElementById('cancel-btn')!.addEventListener('click', () => getCurrentWindow().close());
+
+  // Tab switching
+  const tabs = document.querySelectorAll<HTMLButtonElement>('.tab-bar .tab');
+  const panels = document.querySelectorAll<HTMLDivElement>('.tab-panel');
+  const saveError = document.getElementById('save-error')!;
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab!;
+      tabs.forEach(t => t.classList.toggle('active', t === tab));
+      panels.forEach(p => p.classList.toggle('active', p.dataset.tab === target));
+      if (target === 'about') saveError.style.display = 'none';
+    });
+  });
+
+  // About section
+  getVersion().then(v => {
+    document.getElementById('about-version')!.textContent = `v${v}`;
+  });
 
   loadConfig();
 });

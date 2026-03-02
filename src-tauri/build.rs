@@ -1,3 +1,21 @@
 fn main() {
-    tauri_build::build()
+    tauri_build::build();
+
+    // Compile the Objective-C AVAssetWriter wrapper on macOS.
+    #[cfg(target_os = "macos")]
+    {
+        cc::Build::new()
+            .file("src/recording/avwriter.m")
+            .flag("-fobjc-arc")              // ARC memory management
+            .flag("-Wno-deprecated-declarations") // suppress deprecation warnings
+            .flag("-Wno-nullability-completeness")
+            .compile("avwriter");
+
+        // Link required frameworks (explicit, don't rely on -fmodules)
+        println!("cargo:rustc-link-lib=framework=AVFoundation");
+        println!("cargo:rustc-link-lib=framework=CoreVideo");
+        println!("cargo:rustc-link-lib=framework=CoreMedia");
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+    }
 }

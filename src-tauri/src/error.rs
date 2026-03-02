@@ -15,6 +15,8 @@ pub enum AppError {
   Window(String),
   #[error("Annotation error: {0}")]
   Annotation(String),
+  #[error("Recording error: {0}")]
+  Recording(String),
   #[error("Tauri error: {0}")]
   Tauri(#[from] tauri::Error),
 }

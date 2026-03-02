@@ -30,6 +30,9 @@ fn register_hotkeys_from_config(
   let window_shortcut: Shortcut = config.hotkey_window.parse().map_err(|e| {
     format!("Invalid window hotkey '{}': {}", config.hotkey_window, e)
   })?;
+  let record_shortcut: Shortcut = config.hotkey_record.parse().map_err(|e| {
+    format!("Invalid record hotkey '{}': {}", config.hotkey_record, e)
+  })?;
 
   app.global_shortcut().on_shortcut(region_shortcut, {
     let app = app.clone();
@@ -57,6 +60,26 @@ fn register_hotkeys_from_config(
     move |_app_handle, _shortcut, _event| {
       if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "window") {
         eprintln!("Window capture failed: {e}");
+      }
+    }
+  })?;
+
+  app.global_shortcut().on_shortcut(record_shortcut, {
+    let app = app.clone();
+    move |_app_handle, _shortcut, _event| {
+      // If already recording, stop. Otherwise, open region selection overlay.
+      let is_recording = app.state::<Mutex<AppState>>().lock_or_recover().is_recording;
+      if is_recording {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+          if let Err(e) = crate::commands::stop_recording(app).await {
+            eprintln!("Stop recording failed: {e}");
+          }
+        });
+      } else {
+        if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "record_region") {
+          eprintln!("Record region overlay failed: {e}");
+        }
       }
     }
   })?;

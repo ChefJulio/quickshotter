@@ -9,130 +9,187 @@
   </head>
   <body>
     <main class="settings">
-      <p class="description">Screenshot tool that captures and copies to clipboard instantly.</p>
+      <nav class="tab-bar">
+        <button class="tab active" data-tab="general">General</button>
+        <button class="tab" data-tab="shortcuts">Shortcuts</button>
+        <button class="tab" data-tab="recording">Recording</button>
+        <button class="tab" data-tab="annotations">Annotations</button>
+        <button class="tab" data-tab="about">About</button>
+      </nav>
 
-      <div class="field">
-        <label for="save-folder">Save folder</label>
-        <div class="field-row">
-          <input type="text" id="save-folder" />
-          <button id="browse-btn" type="button">Browse...</button>
+      <div class="tab-panel active" data-tab="general">
+        <div class="field">
+          <label for="save-folder">Save folder</label>
+          <div class="field-row">
+            <input type="text" id="save-folder" />
+            <button id="browse-btn" type="button">Browse...</button>
+          </div>
+          <span id="folder-warning" class="folder-warning" style="display: none;"></span>
         </div>
-        <span id="folder-warning" class="folder-warning" style="display: none;"></span>
-      </div>
 
-      <div class="field">
-        <label for="hotkey-region">Region hotkey</label>
-        <input type="text" id="hotkey-region" class="hotkey-input" readonly placeholder="Click to record..." />
-      </div>
-
-      <div class="field">
-        <label for="hotkey-fullscreen">Fullscreen hotkey</label>
-        <input type="text" id="hotkey-fullscreen" class="hotkey-input" readonly placeholder="Click to record..." />
-      </div>
-
-      <div class="field">
-        <label for="hotkey-window">Window capture hotkey</label>
-        <input type="text" id="hotkey-window" class="hotkey-input" readonly placeholder="Click to record..." />
-        <span class="hint">Click to record a key combination (requires at least one modifier)</span>
-      </div>
-
-      <div class="field">
-        <label for="format">Save format</label>
-        <select id="format">
-          <option value="jpg">JPG</option>
-          <option value="png">PNG</option>
-          <option value="webp">WebP</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="filename-prefix">Filename prefix</label>
-        <input type="text" id="filename-prefix" />
-      </div>
-
-      <div class="field">
-        <label for="filename-suffix">Filename date format</label>
-        <input type="text" id="filename-suffix" />
-        <span class="hint">strftime format, e.g. %Y-%m-%d_%H-%M-%S</span>
-      </div>
-
-      <div class="field checkbox-field">
-        <input type="checkbox" id="save-to-disk" />
-        <label for="save-to-disk">Also save screenshots to disk</label>
-      </div>
-
-      <div class="field">
-        <label for="capture-mode">Capture mode</label>
-        <select id="capture-mode">
-          <option value="instant">Instant (faster overlay)</option>
-          <option value="freeze">Freeze (captures screen first)</option>
-        </select>
-        <span class="hint">Instant shows overlay immediately; Freeze captures the screen first so it stays still</span>
-      </div>
-
-      <div class="field checkbox-field">
-        <input type="checkbox" id="annotate-captures" />
-        <label for="annotate-captures">Open annotation editor after capture</label>
-      </div>
-
-      <div id="annotation-options">
-        <p class="section-header">Annotation tool mappings</p>
-        <div class="modifier-row">
-          <label for="mod-default">Default</label>
-          <select id="mod-default">
-            <option value="freehand">Freehand</option>
-            <option value="arrow">Arrow</option>
-            <option value="oval">Oval</option>
-            <option value="rect">Rectangle</option>
-            <option value="text">Text</option>
+        <div class="field">
+          <label for="format">Save format</label>
+          <select id="format">
+            <option value="jpg">JPG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
           </select>
         </div>
-        <div class="modifier-row">
-          <label for="mod-shift">Shift</label>
-          <select id="mod-shift">
-            <option value="arrow">Arrow</option>
-            <option value="oval">Oval</option>
-            <option value="rect">Rectangle</option>
-            <option value="text">Text</option>
-            <option value="freehand">Freehand</option>
-            <option value="none">None</option>
-          </select>
+
+        <div class="field">
+          <label for="filename-prefix">Filename prefix</label>
+          <input type="text" id="filename-prefix" />
         </div>
-        <div class="modifier-row">
-          <label for="mod-ctrl">Ctrl</label>
-          <select id="mod-ctrl">
-            <option value="oval">Oval</option>
-            <option value="arrow">Arrow</option>
-            <option value="rect">Rectangle</option>
-            <option value="text">Text</option>
-            <option value="freehand">Freehand</option>
-            <option value="none">None</option>
-          </select>
+
+        <div class="field">
+          <label for="filename-suffix">Filename date format</label>
+          <input type="text" id="filename-suffix" />
+          <span class="hint">strftime format, e.g. %Y-%m-%d_%H-%M-%S</span>
         </div>
-        <div class="modifier-row">
-          <label for="mod-alt">Alt</label>
-          <select id="mod-alt">
-            <option value="text">Text</option>
-            <option value="arrow">Arrow</option>
-            <option value="oval">Oval</option>
-            <option value="rect">Rectangle</option>
-            <option value="freehand">Freehand</option>
-            <option value="none">None</option>
+
+        <div class="field checkbox-field">
+          <input type="checkbox" id="copy-to-clipboard" />
+          <label for="copy-to-clipboard">Copy screenshots to clipboard</label>
+        </div>
+
+        <div class="field checkbox-field">
+          <input type="checkbox" id="save-to-disk" />
+          <label for="save-to-disk">Also save screenshots to disk</label>
+        </div>
+
+        <div class="field">
+          <label for="capture-mode">Capture mode</label>
+          <select id="capture-mode">
+            <option value="instant">Instant (faster overlay)</option>
+            <option value="freeze">Freeze (captures screen first)</option>
           </select>
+          <span class="hint">Instant shows overlay immediately; Freeze captures the screen first so it stays still</span>
+        </div>
+
+        <div class="field checkbox-field">
+          <input type="checkbox" id="launch-on-startup" />
+          <label for="launch-on-startup">Launch on startup</label>
         </div>
       </div>
 
-      <div class="field checkbox-field">
-        <input type="checkbox" id="launch-on-startup" />
-        <label for="launch-on-startup">Launch on startup</label>
+      <div class="tab-panel" data-tab="shortcuts">
+        <div class="field">
+          <label for="hotkey-region">Region hotkey</label>
+          <input type="text" id="hotkey-region" class="hotkey-input" readonly placeholder="Click to record..." />
+        </div>
+
+        <div class="field">
+          <label for="hotkey-fullscreen">Fullscreen hotkey</label>
+          <input type="text" id="hotkey-fullscreen" class="hotkey-input" readonly placeholder="Click to record..." />
+        </div>
+
+        <div class="field">
+          <label for="hotkey-window">Window capture hotkey</label>
+          <input type="text" id="hotkey-window" class="hotkey-input" readonly placeholder="Click to record..." />
+          <span class="hint">Click to record a key combination (requires at least one modifier)</span>
+        </div>
+
+        <div class="field">
+          <label for="hotkey-record">Record screen hotkey</label>
+          <input type="text" id="hotkey-record" class="hotkey-input" readonly placeholder="Click to record..." />
+        </div>
+      </div>
+
+      <div class="tab-panel" data-tab="recording">
+        <div class="field">
+          <label for="recording-format">Recording format</label>
+          <select id="recording-format">
+            <option value="mp4">MP4 (H.264)</option>
+            <option value="gif">GIF</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="recording-fps">Frame rate</label>
+          <select id="recording-fps">
+            <option value="10">10 FPS</option>
+            <option value="15">15 FPS</option>
+            <option value="24">24 FPS</option>
+            <option value="30">30 FPS</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="gif-max-duration">GIF max duration (seconds)</label>
+          <input type="number" id="gif-max-duration" min="1" max="120" />
+          <span class="hint">GIF recordings auto-stop after this many seconds</span>
+        </div>
+
+        <div class="field">
+          <label for="gif-max-width">GIF max width (pixels)</label>
+          <input type="number" id="gif-max-width" min="100" max="3840" />
+          <span class="hint">Frames wider than this are downscaled. Lower = smaller file size</span>
+        </div>
+      </div>
+
+      <div class="tab-panel" data-tab="annotations">
+        <div class="field checkbox-field">
+          <input type="checkbox" id="annotate-captures" />
+          <label for="annotate-captures">Open annotation editor after capture</label>
+        </div>
+        <span class="hint">Tip: Hold Shift when releasing a region or clicking a window to open the annotation editor for that capture</span>
+
+        <div id="annotation-options">
+          <p class="section-header">Annotation tool mappings</p>
+          <div class="modifier-row">
+            <label for="mod-default">Default</label>
+            <select id="mod-default">
+              <option value="freehand">Freehand</option>
+              <option value="arrow">Arrow</option>
+              <option value="oval">Oval</option>
+              <option value="rect">Rectangle</option>
+              <option value="text">Text</option>
+            </select>
+          </div>
+          <div class="modifier-row">
+            <label for="mod-shift">Shift</label>
+            <select id="mod-shift">
+              <option value="arrow">Arrow</option>
+              <option value="oval">Oval</option>
+              <option value="rect">Rectangle</option>
+              <option value="text">Text</option>
+              <option value="freehand">Freehand</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+          <div class="modifier-row">
+            <label for="mod-ctrl">Ctrl</label>
+            <select id="mod-ctrl">
+              <option value="oval">Oval</option>
+              <option value="arrow">Arrow</option>
+              <option value="rect">Rectangle</option>
+              <option value="text">Text</option>
+              <option value="freehand">Freehand</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+          <div class="modifier-row">
+            <label for="mod-alt">Alt</label>
+            <select id="mod-alt">
+              <option value="text">Text</option>
+              <option value="arrow">Arrow</option>
+              <option value="oval">Oval</option>
+              <option value="rect">Rectangle</option>
+              <option value="freehand">Freehand</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-panel" data-tab="about">
+        <div class="about-section">
+          <p class="about-title">QuickShotter <span id="about-version"></span></p>
+          <p class="about-detail">Fast cross-platform screenshot tool</p>
+        </div>
       </div>
 
       <div id="save-error" class="save-error" style="display: none;"></div>
-
-      <div class="buttons">
-        <button id="save-btn" type="button">Save</button>
-        <button id="cancel-btn" type="button">Cancel</button>
-      </div>
     </main>
   </body>
 </html>

@@ -19,6 +19,7 @@ let currentY = 0;
 
 let mode: string = 'instant';
 let cancelled = false;
+let isRecordingActive = false; // Set when recording starts; prevents blur/cancel
 
 // DPI scale factor: CSS pixels * scale = physical pixels (what Rust uses).
 // In freeze/window mode, derived from the actual screenshot dimensions
@@ -67,6 +68,36 @@ function initCanvas() {
 function showInstantOverlay() {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function showRecordRegionOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Show hint text
+  ctx.font = 'bold 16px Consolas, monospace';
+  ctx.fillStyle = 'rgba(255, 60, 60, 0.9)';
+  ctx.textAlign = 'center';
+  ctx.fillText('Select region to record', canvas.width / 2, 40);
+  ctx.textAlign = 'start';
+}
+
+function showRecordingBoundary(x: number, y: number, w: number, h: number) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Red border OUTSIDE the recording region so it doesn't get captured.
+  // strokeRect draws the stroke centered on the coordinates, so offset by
+  // half the line width to keep the inner edge just outside the capture area.
+  const bw = 3;
+  ctx.strokeStyle = 'rgba(255, 60, 60, 0.9)';
+  ctx.lineWidth = bw;
+  ctx.setLineDash([8, 4]);
+  const offset = Math.ceil(bw / 2) + 1; // extra 1px gap from capture edge
+  ctx.strokeRect(x - offset, y - offset, w + offset * 2, h + offset * 2);
+  ctx.setLineDash([]);
+  // Small "REC" label above the region
+  ctx.font = 'bold 12px Consolas, monospace';
+  ctx.fillStyle = 'rgba(255, 60, 60, 0.95)';
+  const labelY = y > 26 ? y - offset - 5 : y + h + offset + 16;
+  ctx.fillText('REC', x, labelY);
 }
 
 function showWindowOverlay() {
@@ -119,7 +150,7 @@ function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return;
 
   if (mode === 'window') {
-    onMouseDownWindow();
+    onMouseDownWindow(e.shiftKey);
     return;
   }
 
@@ -142,7 +173,7 @@ function onMouseMove(e: MouseEvent) {
   drawSelection();
 }
 
-function onMouseUp(e: MouseEvent) {
+async function onMouseUp(e: MouseEvent) {
   if (mode === 'window') return; // Window mode uses click, not drag
 
   if (!isDragging) return;
@@ -163,10 +194,84 @@ function onMouseUp(e: MouseEvent) {
   const y1 = Math.round(cssY1 * scale());
   const x2 = Math.round(cssX2 * scale());
   const y2 = Math.round(cssY2 * scale());
-  invoke('complete_region_capture', { x1, y1, x2, y2 }).catch((e) => {
-    console.error('Region capture failed:', e);
-    cancel();
-  });
+
+  if (mode === 'record_region') {
+    // Region recording: start recording, keep overlay as click-through boundary
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    console.log('record_region coords:', {
+      css: { x1: cssX1, y1: cssY1, x2: cssX2, y2: cssY2 },
+      physical: { x, y, width, height },
+      scale: scale(), dpr: window.devicePixelRatio,
+      canvas: { w: canvas.width, h: canvas.height },
+      innerSize: { w: window.innerWidth, h: window.innerHeight },
+    });
+    try {
+      // Set flag BEFORE the invoke -- Rust opens the recording indicator window
+      // which steals focus, firing the blur handler. The flag must already be
+      // true so the blur handler skips the cancel().
+      isRecordingActive = true;
+
+      // Clear the canvas completely and wait for the browser to repaint so
+      // the selection UI (dim + blue rectangle) doesn't appear in the first frame.
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      await new Promise<void>(r => requestAnimationFrame(() => setTimeout(r, 50)));
+
+      // Pass CSS coords so Rust can position the indicator at the selection
+      await invoke('start_region_recording', {
+        x, y, width, height,
+        indicatorX: Math.round(cssX1),
+        indicatorY: Math.round(cssY1),
+      });
+
+      // Now draw the recording boundary (outside capture region, won't be captured)
+      showRecordingBoundary(cssX1, cssY1, cssX2 - cssX1, cssY2 - cssY1);
+
+      // Make overlay click-through so the user can interact with everything.
+      // Remove all canvas listeners first to prevent JS-level event blocking.
+      canvas.removeEventListener('mousedown', onMouseDown);
+      canvas.removeEventListener('mousemove', onMouseMove);
+      canvas.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('keydown', onKeyDown);
+
+      const win = getCurrentWindow();
+      await win.setIgnoreCursorEvents(true).catch(() => {
+        // If click-through fails, log it but keep overlay. User can still
+        // stop recording via Escape on the indicator or the Stop button.
+        console.warn('setIgnoreCursorEvents failed - overlay may block clicks');
+      });
+
+      // Poll recording state; close overlay when recording stops
+      const poll = setInterval(async () => {
+        try {
+          const state: { is_recording: boolean } = await invoke('get_recording_state');
+          if (!state.is_recording) {
+            clearInterval(poll);
+            isRecordingActive = false;
+            cancelled = false;
+            cancel();
+          }
+        } catch {
+          clearInterval(poll);
+          isRecordingActive = false;
+          cancelled = false;
+          cancel();
+        }
+      }, 500);
+    } catch (e) {
+      console.error('Region recording failed:', e);
+      isRecordingActive = false;
+      cancel();
+    }
+    return;
+  } else {
+    invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: e.shiftKey }).catch((e) => {
+      console.error('Region capture failed:', e);
+      cancel();
+    });
+  }
 }
 
 function drawSelection() {
@@ -191,10 +296,15 @@ function drawSelection() {
     ctx.clearRect(x1, y1, w, h);
   }
 
-  // Selection border
+  // Selection border — draw outside the selection in record_region mode
+  // so it never appears inside the captured area
   ctx.strokeStyle = '#00aaff';
   ctx.lineWidth = 2;
-  ctx.strokeRect(x1, y1, w, h);
+  if (mode === 'record_region') {
+    ctx.strokeRect(x1 - 2, y1 - 2, w + 4, h + 4);
+  } else {
+    ctx.strokeRect(x1, y1, w, h);
+  }
 
   // Dimension label -- show physical pixel dimensions (actual capture size)
   const physW = Math.round(w * scale());
@@ -262,10 +372,10 @@ function drawWindowHighlight() {
   }
 }
 
-function onMouseDownWindow() {
+function onMouseDownWindow(shiftKey: boolean) {
   if (!highlightPhysical) return;
   // Send physical pixel coords directly to Rust
-  invoke('complete_window_capture', highlightPhysical).catch((e) => {
+  invoke('complete_window_capture', { ...highlightPhysical, forceAnnotate: shiftKey }).catch((e) => {
     console.error('Window capture failed:', e);
     cancel();
   });
@@ -275,8 +385,14 @@ function onMouseDownWindow() {
 
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    // Escape ALWAYS works, even during recording -- never trap the user
+    if (isRecordingActive) {
+      isRecordingActive = false;
+      invoke('stop_recording').catch(() => {});
+    }
+    cancelled = false; // Reset so cancel() runs even if previously called
     cancel();
-  } else if (mode !== 'window' && (e.key === 'Enter' || e.key === ' ')) {
+  } else if (mode !== 'window' && mode !== 'record_region' && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
     captureFullscreen();
   }
@@ -313,6 +429,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     } else if (mode === 'freeze') {
       const base64Data: string = await invoke('get_pending_screenshot');
       loadScreenshot(base64Data);
+    } else if (mode === 'record_region') {
+      showRecordRegionOverlay();
     } else {
       showInstantOverlay();
     }
@@ -322,10 +440,11 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // Cancel capture if overlay loses OS focus (e.g. Cmd+Tab, system UI).
     // Small delay avoids false triggers from momentary focus transitions.
+    // Skip when recording is active -- the overlay stays as a visual boundary.
     window.addEventListener('blur', () => {
-      if (isDragging) return; // don't interrupt active selection
+      if (isDragging || isRecordingActive) return;
       setTimeout(() => {
-        if (!document.hasFocus()) cancel();
+        if (!document.hasFocus() && !isRecordingActive) cancel();
       }, 200);
     });
   } catch (e) {

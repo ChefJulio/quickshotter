@@ -46,6 +46,27 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
           });
         }
+        "record_screen" => {
+          let app = app.clone();
+          tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::commands::toggle_recording(app).await {
+              eprintln!("Recording toggle failed: {e}");
+            }
+          });
+        }
+        "record_region" => {
+          if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "record_region") {
+            eprintln!("Record region overlay failed: {e}");
+          }
+        }
+        "stop_recording" => {
+          let app = app.clone();
+          tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::commands::stop_recording(app).await {
+              eprintln!("Stop recording failed: {e}");
+            }
+          });
+        }
         "settings" => {
           crate::commands::show_settings_window(&app);
         }
@@ -95,6 +116,27 @@ pub fn build_tray_menu(
       .build(app)?,
   );
 
+  builder = builder.item(&PredefinedMenuItem::separator(app)?);
+
+  // Recording items: show "Stop Recording" when active, otherwise show "Record Screen"
+  let is_recording = app.state::<Mutex<AppState>>().lock_or_recover().is_recording;
+  if is_recording {
+    builder = builder.item(
+      &MenuItemBuilder::with_id("stop_recording", "Stop Recording")
+        .build(app)?,
+    );
+  } else {
+    let record_region_label = format!("Record Region  ({})", format_hotkey_display(&config.hotkey_record));
+    builder = builder.item(
+      &MenuItemBuilder::with_id("record_region", &record_region_label)
+        .build(app)?,
+    );
+    builder = builder.item(
+      &MenuItemBuilder::with_id("record_screen", "Record Fullscreen")
+        .build(app)?,
+    );
+  }
+
   if !history.is_empty() {
     builder = builder.item(&PredefinedMenuItem::separator(app)?);
     for (i, path) in history.iter().rev().enumerate() {
@@ -132,12 +174,14 @@ pub fn refresh_tray_menu(app: &AppHandle) {
   }
 }
 
-fn open_in_explorer(path: &PathBuf) {
+pub fn open_in_explorer(path: &PathBuf) {
   #[cfg(target_os = "windows")]
   {
-    // /select, and quoted path to handle spaces and commas correctly
+    // Use raw_arg so the /select, and path are passed as one token to explorer
+    // without extra quoting from Rust's Command::arg().
+    use std::os::windows::process::CommandExt;
     std::process::Command::new("explorer")
-      .arg(format!("/select,\"{}\"", path.display()))
+      .raw_arg(format!("/select,\"{}\"", path.display()))
       .spawn()
       .map_err(|e| eprintln!("Failed to open explorer: {e}"))
       .ok();

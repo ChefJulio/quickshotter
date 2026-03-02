@@ -233,6 +233,109 @@ pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), AppError> {
   Ok(())
 }
 
+/// Copy a file to the system clipboard as a file drop (like Ctrl+C in Explorer).
+/// This lets users paste the file into Discord, Slack, email, file managers, etc.
+#[cfg(target_os = "windows")]
+pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), AppError> {
+  use std::os::windows::ffi::OsStrExt;
+  use windows::Win32::System::DataExchange::{
+    OpenClipboard, CloseClipboard, EmptyClipboard, SetClipboardData,
+  };
+  use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalUnlock, GLOBAL_ALLOC_FLAGS,
+  };
+
+  // DROPFILES struct layout (20 bytes):
+  //   u32 pFiles  - offset to file list
+  //   i32 pt.x    - drop point x (unused, 0)
+  //   i32 pt.y    - drop point y (unused, 0)
+  //   i32 fNC     - non-client area flag (0)
+  //   i32 fWide   - 1 = Unicode paths
+  #[repr(C)]
+  struct DropFiles {
+    p_files: u32,
+    pt_x: i32,
+    pt_y: i32,
+    f_nc: i32,
+    f_wide: i32,
+  }
+
+  const CF_HDROP: u32 = 15;
+  const GMEM_MOVEABLE: u32 = 0x0002;
+  const GMEM_ZEROINIT: u32 = 0x0040;
+
+  let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+  let header_size = std::mem::size_of::<DropFiles>();
+  // file path + extra null terminator for double-null termination
+  let total_size = header_size + (wide_path.len() + 1) * 2;
+
+  unsafe {
+    let hmem = GlobalAlloc(GLOBAL_ALLOC_FLAGS(GMEM_MOVEABLE | GMEM_ZEROINIT), total_size)
+      .map_err(|e| AppError::Clipboard(format!("GlobalAlloc failed: {e}")))?;
+    let ptr = GlobalLock(hmem) as *mut u8;
+    if ptr.is_null() {
+      return Err(AppError::Clipboard("GlobalLock returned null".to_string()));
+    }
+
+    // Fill DROPFILES header
+    let header = ptr as *mut DropFiles;
+    (*header).p_files = header_size as u32;
+    (*header).f_wide = 1;
+
+    // Copy wide path after header
+    let file_list = ptr.add(header_size) as *mut u16;
+    std::ptr::copy_nonoverlapping(wide_path.as_ptr(), file_list, wide_path.len());
+    // Double-null termination is already zeroed by GMEM_ZEROINIT
+
+    let _ = GlobalUnlock(hmem);
+
+    OpenClipboard(None)
+      .map_err(|e| AppError::Clipboard(format!("OpenClipboard failed: {e}")))?;
+    EmptyClipboard()
+      .map_err(|e| {
+        let _ = CloseClipboard();
+        AppError::Clipboard(format!("EmptyClipboard failed: {e}"))
+      })?;
+
+    use windows::Win32::Foundation::HANDLE;
+    SetClipboardData(CF_HDROP, Some(HANDLE(hmem.0 as *mut _)))
+      .map_err(|e| {
+        let _ = CloseClipboard();
+        AppError::Clipboard(format!("SetClipboardData failed: {e}"))
+      })?;
+    let _ = CloseClipboard();
+  }
+
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), AppError> {
+  // Use `pbcopy`-style approach: run a small AppleScript/osascript to set the
+  // file on the pasteboard. This is simpler than linking NSPasteboard via ObjC FFI
+  // and handles all the pasteboard types correctly for Finder paste.
+  let path_str = path.to_string_lossy();
+  let script = format!(
+    r#"set the clipboard to (POSIX file "{}")"#,
+    path_str.replace('\\', "\\\\").replace('"', "\\\"")
+  );
+  let output = std::process::Command::new("osascript")
+    .args(["-e", &script])
+    .output()
+    .map_err(|e| AppError::Clipboard(format!("osascript failed: {e}")))?;
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    return Err(AppError::Clipboard(format!("osascript error: {stderr}")));
+  }
+  Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn copy_file_to_clipboard(_path: &std::path::Path) -> Result<(), AppError> {
+  // Linux: not yet implemented; silently succeed
+  Ok(())
+}
+
 /// Strip path-significant and Windows-reserved characters from filename parts.
 fn sanitize_filename_part(s: &str) -> String {
   s.replace(['/', '\\', ':', '<', '>', '|', '"', '?', '*', '\0'], "_")
