@@ -196,15 +196,22 @@ async function onMouseUp(e: MouseEvent) {
   const y2 = Math.round(cssY2 * scale());
 
   if (mode === 'record_region') {
-    // Region recording: start recording, keep overlay as click-through boundary
-    const x = Math.min(x1, x2);
-    const y = Math.min(y1, y2);
-    const width = Math.abs(x2 - x1);
-    const height = Math.abs(y2 - y1);
+    // Region recording: use xcapScale for coordinates, NOT scale()/DPR.
+    // Recording region coords must be in xcap's coordinate space:
+    //   macOS: logical points (xcapScale=1) -- monitor dims are logical
+    //   Windows: physical pixels (xcapScale=DPR) -- monitor dims are physical
+    const rx1 = Math.round(cssX1 * xcapScale);
+    const ry1 = Math.round(cssY1 * xcapScale);
+    const rx2 = Math.round(cssX2 * xcapScale);
+    const ry2 = Math.round(cssY2 * xcapScale);
+    const x = Math.min(rx1, rx2);
+    const y = Math.min(ry1, ry2);
+    const width = Math.abs(rx2 - rx1);
+    const height = Math.abs(ry2 - ry1);
     console.log('record_region coords:', {
       css: { x1: cssX1, y1: cssY1, x2: cssX2, y2: cssY2 },
-      physical: { x, y, width, height },
-      scale: scale(), dpr: window.devicePixelRatio,
+      xcap: { x, y, width, height },
+      xcapScale, dpr: window.devicePixelRatio,
       canvas: { w: canvas.width, h: canvas.height },
       innerSize: { w: window.innerWidth, h: window.innerHeight },
     });
@@ -437,6 +444,20 @@ window.addEventListener('DOMContentLoaded', async () => {
     const win = getCurrentWindow();
     await win.show();
     await win.setFocus();
+
+    // macOS compositor doesn't pick up canvas content drawn before the
+    // transparent window is shown. Force a redraw now that the window is
+    // visible so the dimmed overlay actually appears immediately.
+    requestAnimationFrame(() => {
+      if (mode === 'window') {
+        showWindowOverlay();
+      } else if (mode === 'record_region') {
+        showRecordRegionOverlay();
+      } else if (mode !== 'freeze') {
+        showInstantOverlay();
+      }
+      // freeze mode redraws asynchronously in loadScreenshot's img.onload
+    });
 
     // Cancel capture if overlay loses OS focus (e.g. Cmd+Tab, system UI).
     // Small delay avoids false triggers from momentary focus transitions.

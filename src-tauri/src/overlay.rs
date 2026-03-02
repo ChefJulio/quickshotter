@@ -159,7 +159,10 @@ pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
   let (x, y, w, h) = if let Ok(Some(monitor)) = app.primary_monitor() {
     let pos = monitor.position();
     let size = monitor.size();
-    (pos.x as f64, pos.y as f64, size.width as f64, size.height as f64)
+    // monitor.size() returns PhysicalSize (e.g. 2880x1800 on Retina).
+    // inner_size() expects logical pixels, so divide by scale factor.
+    let sf = monitor.scale_factor();
+    (pos.x as f64, pos.y as f64, size.width as f64 / sf, size.height as f64 / sf)
   } else {
     // Fallback: full desktop bounds
     let bounds = capture::get_desktop_bounds()?;

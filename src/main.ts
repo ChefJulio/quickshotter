@@ -1,5 +1,7 @@
 import { invoke, addPluginListener } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
+import { check } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
 import type { AppConfig } from './types';
 
 // Listen for notification clicks to reveal files in Explorer
@@ -326,6 +328,56 @@ window.addEventListener('DOMContentLoaded', () => {
   // About section
   getVersion().then(v => {
     document.getElementById('about-version')!.textContent = `v${v}`;
+  });
+
+  // Update checker
+  const checkUpdateBtn = document.getElementById('check-update-btn') as HTMLButtonElement;
+  const updateStatus = document.getElementById('update-status')!;
+  const restartBtn = document.getElementById('restart-btn') as HTMLButtonElement;
+
+  checkUpdateBtn.addEventListener('click', async () => {
+    checkUpdateBtn.disabled = true;
+    updateStatus.className = 'update-status';
+    updateStatus.textContent = 'Checking for updates...';
+
+    try {
+      const update = await check();
+      if (!update) {
+        updateStatus.textContent = 'You are on the latest version.';
+        updateStatus.classList.add('success');
+        checkUpdateBtn.disabled = false;
+        return;
+      }
+
+      updateStatus.textContent = `Downloading v${update.version}...`;
+
+      let totalBytes = 0;
+      let receivedBytes = 0;
+      await update.downloadAndInstall((progress) => {
+        if (progress.event === 'Started' && progress.data.contentLength) {
+          totalBytes = progress.data.contentLength;
+        } else if (progress.event === 'Progress') {
+          receivedBytes += progress.data.chunkLength;
+          if (totalBytes > 0) {
+            const pct = Math.round((receivedBytes / totalBytes) * 100);
+            updateStatus.textContent = `Downloading v${update.version}... ${pct}%`;
+          }
+        } else if (progress.event === 'Finished') {
+          updateStatus.textContent = 'Update installed. Restart to apply.';
+          updateStatus.classList.add('success');
+        }
+      });
+
+      restartBtn.style.display = '';
+    } catch (e) {
+      updateStatus.textContent = `Update failed: ${e}`;
+      updateStatus.classList.add('error');
+      checkUpdateBtn.disabled = false;
+    }
+  });
+
+  restartBtn.addEventListener('click', async () => {
+    await relaunch();
   });
 
   loadConfig();

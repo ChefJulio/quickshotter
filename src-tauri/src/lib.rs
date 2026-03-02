@@ -24,6 +24,8 @@ pub fn run() {
       tauri_plugin_autostart::MacosLauncher::LaunchAgent,
       None,
     ))
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     .invoke_handler(tauri::generate_handler![
       commands::trigger_region_capture,
       commands::trigger_fullscreen_capture,

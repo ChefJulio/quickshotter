@@ -21,6 +21,8 @@
     "global-shortcut:allow-is-registered",
     "dialog:allow-open",
     "notification:default",
-    "autostart:default"
+    "autostart:default",
+    "updater:default",
+    "process:default"
   ]
 }

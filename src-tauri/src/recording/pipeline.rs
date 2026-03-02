@@ -193,6 +193,11 @@ fn capture_loop(
     let mut sent_count: u32 = 0;
     let mut dropped_count: u32 = 0;
 
+    // On macOS Retina, capture_image() returns physical pixels (2x) but
+    // region coords are in xcap's coordinate space (logical points).
+    // Computed on first frame and cached for the rest of the recording.
+    let mut scaled_region: Option<RecordingRegion> = None;
+
     eprintln!("recording: capture_loop started (single-monitor, {}fps)", fps);
 
     loop {
@@ -224,13 +229,36 @@ fn capture_loop(
             }
         };
 
-        // Crop to region if specified
-        let frame = if let Some(ref r) = region {
-            if !logged_first_frame {
-                eprintln!("recording: first frame capture={}x{} region=({},{} {}x{})",
-                    img.width(), img.height(), r.x, r.y, r.width, r.height);
-                logged_first_frame = true;
+        // On first frame, detect Retina/HiDPI scaling and compute scaled crop region.
+        // Region coords are in xcap space (logical on macOS), but capture_image()
+        // returns physical pixels. Scale region to match actual capture resolution.
+        if !logged_first_frame {
+            if let Some(ref r) = region {
+                let mon_w = monitor.0.width().unwrap_or(img.width());
+                let mon_h = monitor.0.height().unwrap_or(img.height());
+                let sx = img.width() as f64 / mon_w as f64;
+                let sy = img.height() as f64 / mon_h as f64;
+                eprintln!("recording: first frame capture={}x{} monitor={}x{} scale={:.2}x{:.2} region=({},{} {}x{})",
+                    img.width(), img.height(), mon_w, mon_h, sx, sy, r.x, r.y, r.width, r.height);
+                if (sx - 1.0).abs() > 0.01 || (sy - 1.0).abs() > 0.01 {
+                    scaled_region = Some(RecordingRegion {
+                        x: (r.x as f64 * sx) as u32,
+                        y: (r.y as f64 * sy) as u32,
+                        width: (r.width as f64 * sx) as u32,
+                        height: (r.height as f64 * sy) as u32,
+                    });
+                    let sr = scaled_region.as_ref().unwrap();
+                    eprintln!("recording: scaled region -> ({},{} {}x{})", sr.x, sr.y, sr.width, sr.height);
+                }
+            } else {
+                eprintln!("recording: first frame capture={}x{} (fullscreen)", img.width(), img.height());
             }
+            logged_first_frame = true;
+        }
+
+        // Crop to region if specified (use scaled region for Retina displays)
+        let frame = if region.is_some() {
+            let r = scaled_region.as_ref().or(region.as_ref()).unwrap();
             let x = r.x.min(img.width().saturating_sub(1));
             let y = r.y.min(img.height().saturating_sub(1));
             let w = r.width.min(img.width().saturating_sub(x));

@@ -269,7 +269,43 @@ button:hover {
   margin: 2px 0 0;
 }
 
+/* Update section */
+.update-section {
+  margin-top: 16px;
+}
+
+#check-update-btn {
+  padding: 6px 18px;
+  font-size: 13px;
+}
+
+.update-status {
+  font-size: 12px;
+  color: #666;
+  margin: 8px 0 0;
+  min-height: 16px;
+}
+
+.update-status.success { color: #2e7d32; }
+.update-status.error { color: #c62828; }
+
+.restart-btn {
+  margin-top: 8px;
+  padding: 6px 18px;
+  font-size: 13px;
+  background: #2196f3;
+  border-color: #1976d2;
+  color: #fff;
+}
+
+.restart-btn:hover {
+  background: #1976d2;
+}
+
 @media (prefers-color-scheme: dark) {
   .about-title { color: #999; }
   .about-detail { color: #666; }
+  .update-status { color: #888; }
+  .update-status.success { color: #66bb6a; }
+  .update-status.error { color: #ef9a9a; }
 }
