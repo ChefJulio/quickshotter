@@ -118,6 +118,17 @@ jobs:
           | **Linux** (Debian/Ubuntu) | [QuickShotter_${VERSION}_amd64.deb](${BASE}/QuickShotter_${VERSION}_amd64.deb) |
           | **Linux** (AppImage) | [QuickShotter_${VERSION}_amd64.AppImage](${BASE}/QuickShotter_${VERSION}_amd64.AppImage) |
 
+          ### macOS: first launch
+
+          The app is not notarized yet, so macOS will block it on first open. To fix this:
+          1. Open the .dmg and drag QuickShotter to Applications
+          2. **Right-click** the app and select **Open** (don't double-click)
+          3. Click **Open** in the dialog that appears
+
+          If that doesn't work: System Settings > Privacy & Security > scroll down and click **Open Anyway**.
+
+          ---
+
           Other files (\`.sig\`, \`.tar.gz\`, \`latest.json\`) are used by the built-in auto-updater.
           EOF
           )"
