@@ -150,7 +150,7 @@ function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return;
 
   if (mode === 'window') {
-    onMouseDownWindow(e.shiftKey);
+    onMouseDownWindow(e.shiftKey, e.altKey);
     return;
   }
 
@@ -274,7 +274,7 @@ async function onMouseUp(e: MouseEvent) {
     }
     return;
   } else {
-    invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: e.shiftKey }).catch((e) => {
+    invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: e.shiftKey, toggleSave: e.altKey }).catch((e) => {
       console.error('Region capture failed:', e);
       cancel();
     });
@@ -379,10 +379,10 @@ function drawWindowHighlight() {
   }
 }
 
-function onMouseDownWindow(shiftKey: boolean) {
+function onMouseDownWindow(shiftKey: boolean, altKey: boolean) {
   if (!highlightPhysical) return;
   // Send physical pixel coords directly to Rust
-  invoke('complete_window_capture', { ...highlightPhysical, forceAnnotate: shiftKey }).catch((e) => {
+  invoke('complete_window_capture', { ...highlightPhysical, forceAnnotate: shiftKey, toggleSave: altKey }).catch((e) => {
     console.error('Window capture failed:', e);
     cancel();
   });

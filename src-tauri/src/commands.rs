@@ -61,7 +61,18 @@ pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
 /// send a desktop notification.  Called from every capture path to avoid
 /// duplicating this pipeline.
 fn finalize_capture(app: &AppHandle, img: &RgbaImage) -> Result<CaptureResultDto, AppError> {
-  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+  finalize_capture_with_toggle(app, img, false)
+}
+
+/// Like finalize_capture, but toggle_save XORs the config's save_to_disk setting.
+/// Alt held during capture toggles: if save is OFF, Alt forces save; if ON, Alt skips.
+fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: bool) -> Result<CaptureResultDto, AppError> {
+  let mut config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+
+  // Alt modifier toggles save-to-disk for this capture only
+  if toggle_save {
+    config.save_to_disk = !config.save_to_disk;
+  }
 
   let copied = if config.copy_to_clipboard {
     capture::copy_to_clipboard(img)?;
@@ -174,15 +185,17 @@ pub async fn complete_region_capture(
   x2: u32,
   y2: u32,
   force_annotate: Option<bool>,
+  toggle_save: Option<bool>,
 ) -> Result<CaptureResultDto, AppError> {
   let force_annotate = force_annotate.unwrap_or(false);
+  let toggle_save = toggle_save.unwrap_or(false);
 
   // Hide overlay immediately (don't destroy -- we're still inside its webview command)
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
 
-  let result = complete_region_capture_inner(&app, x1, y1, x2, y2, force_annotate).await;
+  let result = complete_region_capture_inner(&app, x1, y1, x2, y2, force_annotate, toggle_save).await;
 
   // Always close overlay to avoid leaking the window.
   // Safe to call even if inner function already closed it (idempotent).
@@ -199,6 +212,7 @@ async fn complete_region_capture_inner(
   x2: u32,
   y2: u32,
   force_annotate: bool,
+  toggle_save: bool,
 ) -> Result<CaptureResultDto, AppError> {
   let left = x1.min(x2);
   let top = y1.min(y2);
@@ -241,7 +255,7 @@ async fn complete_region_capture_inner(
     return open_annotation_for_image(app, image).await;
   }
 
-  finalize_capture(app, &image)
+  finalize_capture_with_toggle(app, &image, toggle_save)
 }
 
 // -- Window capture commands --
@@ -261,15 +275,17 @@ pub async fn complete_window_capture(
   right: i32,
   bottom: i32,
   force_annotate: Option<bool>,
+  toggle_save: Option<bool>,
 ) -> Result<CaptureResultDto, AppError> {
   let force_annotate = force_annotate.unwrap_or(false);
+  let toggle_save = toggle_save.unwrap_or(false);
 
   // Hide overlay immediately
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
 
-  let result = complete_window_capture_inner(&app, left, top, right, bottom, force_annotate).await;
+  let result = complete_window_capture_inner(&app, left, top, right, bottom, force_annotate, toggle_save).await;
 
   // Always close overlay to avoid leaking the window.
   // Safe to call even if already closed (idempotent).
@@ -286,6 +302,7 @@ async fn complete_window_capture_inner(
   right: i32,
   bottom: i32,
   force_annotate: bool,
+  toggle_save: bool,
 ) -> Result<CaptureResultDto, AppError> {
   if right <= left || bottom <= top {
     return Err(AppError::Capture("Invalid window bounds".to_string()));
@@ -344,7 +361,7 @@ async fn complete_window_capture_inner(
     return open_annotation_for_image(app, image).await;
   }
 
-  finalize_capture(app, &image)
+  finalize_capture_with_toggle(app, &image, toggle_save)
 }
 
 // -- Annotation commands --
