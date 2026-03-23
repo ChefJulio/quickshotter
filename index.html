@@ -70,6 +70,12 @@
           <input type="checkbox" id="launch-on-startup" />
           <label for="launch-on-startup">Launch on startup</label>
         </div>
+
+        <div class="field checkbox-field">
+          <input type="checkbox" id="explorer-context-menu" />
+          <label for="explorer-context-menu">Add to Explorer right-click menu</label>
+          <span class="hint">Right-click image files in Explorer to annotate them with QuickShotter</span>
+        </div>
       </div>
 
       <div class="tab-panel" data-tab="shortcuts">
@@ -135,49 +141,98 @@
         <span class="hint">Tip: Hold Shift when releasing a region or clicking a window to open the annotation editor for that capture</span>
 
         <div id="annotation-options">
-          <p class="section-header">Annotation tool mappings</p>
-          <div class="modifier-row">
-            <label for="mod-default">Default</label>
-            <select id="mod-default">
-              <option value="freehand">Freehand</option>
-              <option value="arrow">Arrow</option>
-              <option value="oval">Oval</option>
-              <option value="rect">Rectangle</option>
-              <option value="text">Text</option>
-            </select>
+          <p class="section-header">Left Click</p>
+          <div class="modifier-group">
+            <div class="modifier-row">
+              <label for="mod-default">Default</label>
+              <select id="mod-default">
+                <option value="freehand">Freehand</option>
+                <option value="arrow">Arrow</option>
+                <option value="oval">Oval</option>
+                <option value="rect">Rectangle</option>
+                <option value="text">Text</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-shift">Shift</label>
+              <select id="mod-shift">
+                <option value="arrow">Arrow</option>
+                <option value="oval">Oval</option>
+                <option value="rect">Rectangle</option>
+                <option value="text">Text</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-ctrl">Ctrl</label>
+              <select id="mod-ctrl">
+                <option value="oval">Oval</option>
+                <option value="arrow">Arrow</option>
+                <option value="rect">Rectangle</option>
+                <option value="text">Text</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-alt">Alt</label>
+              <select id="mod-alt">
+                <option value="text">Text</option>
+                <option value="arrow">Arrow</option>
+                <option value="oval">Oval</option>
+                <option value="rect">Rectangle</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
           </div>
-          <div class="modifier-row">
-            <label for="mod-shift">Shift</label>
-            <select id="mod-shift">
-              <option value="arrow">Arrow</option>
-              <option value="oval">Oval</option>
-              <option value="rect">Rectangle</option>
-              <option value="text">Text</option>
-              <option value="freehand">Freehand</option>
-              <option value="none">None</option>
-            </select>
-          </div>
-          <div class="modifier-row">
-            <label for="mod-ctrl">Ctrl</label>
-            <select id="mod-ctrl">
-              <option value="oval">Oval</option>
-              <option value="arrow">Arrow</option>
-              <option value="rect">Rectangle</option>
-              <option value="text">Text</option>
-              <option value="freehand">Freehand</option>
-              <option value="none">None</option>
-            </select>
-          </div>
-          <div class="modifier-row">
-            <label for="mod-alt">Alt</label>
-            <select id="mod-alt">
-              <option value="text">Text</option>
-              <option value="arrow">Arrow</option>
-              <option value="oval">Oval</option>
-              <option value="rect">Rectangle</option>
-              <option value="freehand">Freehand</option>
-              <option value="none">None</option>
-            </select>
+
+          <p class="section-header">Right Click</p>
+          <div class="modifier-group">
+            <div class="modifier-row">
+              <label for="mod-right-default">Default</label>
+              <select id="mod-right-default">
+                <option value="arrow">Arrow</option>
+                <option value="freehand">Freehand</option>
+                <option value="oval">Oval</option>
+                <option value="rect">Rectangle</option>
+                <option value="text">Text</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-right-shift">Shift</label>
+              <select id="mod-right-shift">
+                <option value="rect">Rectangle</option>
+                <option value="arrow">Arrow</option>
+                <option value="oval">Oval</option>
+                <option value="text">Text</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-right-ctrl">Ctrl</label>
+              <select id="mod-right-ctrl">
+                <option value="oval">Oval</option>
+                <option value="arrow">Arrow</option>
+                <option value="rect">Rectangle</option>
+                <option value="text">Text</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+            <div class="modifier-row">
+              <label for="mod-right-alt">Alt</label>
+              <select id="mod-right-alt">
+                <option value="text">Text</option>
+                <option value="arrow">Arrow</option>
+                <option value="oval">Oval</option>
+                <option value="rect">Rectangle</option>
+                <option value="freehand">Freehand</option>
+                <option value="none">None</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>

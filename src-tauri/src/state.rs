@@ -26,6 +26,8 @@ pub struct AppState {
   // Annotation: image waiting to be annotated
   pub pending_annotation: Option<RgbaImage>,
   pub pending_annotation_base64: Option<String>,
+  // When annotating a file from disk, stores the source path for save-beside behavior
+  pub annotation_source_path: Option<PathBuf>,
   // Recording state
   pub is_recording: bool,
   pub recording_stop_signal: Option<Arc<AtomicBool>>,
@@ -48,6 +50,7 @@ impl AppState {
       overlay_window_id: 0,
       pending_annotation: None,
       pending_annotation_base64: None,
+      annotation_source_path: None,
       is_recording: false,
       recording_stop_signal: None,
       recording_region: None,

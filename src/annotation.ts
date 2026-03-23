@@ -71,7 +71,10 @@ let activeFontSize = 16;
 let arrowStyle = 'standard';
 
 // Modifier-to-tool mapping
-let modifierTools: AnnotationConfig = { shift_tool: 'arrow', ctrl_tool: 'oval', alt_tool: 'text', default_tool: 'freehand' };
+let modifierTools: AnnotationConfig = {
+  shift_tool: 'arrow', ctrl_tool: 'oval', alt_tool: 'text', default_tool: 'freehand',
+  right_default_tool: 'arrow', right_shift_tool: 'rect', right_ctrl_tool: 'oval', right_alt_tool: 'text',
+};
 
 // Text tool state
 let textInputActive = false;
@@ -154,6 +157,32 @@ function render() {
   }
 
   ctx.restore();
+
+  // Draw delete button for hovered annotation (in screen-space, after restore)
+  if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length && !isDrawing) {
+    const bp = deleteButtonPos(undoStack[hoveredAnnotationIdx]);
+    if (bp) {
+      const r = 8;
+      ctx.save();
+      // Circle background
+      ctx.beginPath();
+      ctx.arc(bp.x, bp.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(220, 40, 40, 0.9)';
+      ctx.fill();
+      // X icon
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.lineCap = 'round';
+      const d = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(bp.x - d, bp.y - d);
+      ctx.lineTo(bp.x + d, bp.y + d);
+      ctx.moveTo(bp.x + d, bp.y - d);
+      ctx.lineTo(bp.x - d, bp.y + d);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }
 
 function drawAnnotation(c: CanvasRenderingContext2D, ann: Annotation) {
@@ -311,22 +340,92 @@ function drawText(c: CanvasRenderingContext2D, ann: TextAnnotation) {
 // -- Tool determination from modifiers --
 
 function toolFromModifiers(e: MouseEvent): string {
+  const isRight = e.button === 2;
   if (e.shiftKey) {
-    const t = modifierTools.shift_tool;
+    const t = isRight ? modifierTools.right_shift_tool : modifierTools.shift_tool;
     return t !== 'none' ? t : activeTool;
   }
   if (e.ctrlKey || e.metaKey) {
-    const t = modifierTools.ctrl_tool;
+    const t = isRight ? modifierTools.right_ctrl_tool : modifierTools.ctrl_tool;
     return t !== 'none' ? t : activeTool;
   }
   if (e.altKey) {
-    const t = modifierTools.alt_tool;
+    const t = isRight ? modifierTools.right_alt_tool : modifierTools.alt_tool;
     return t !== 'none' ? t : activeTool;
+  }
+  if (isRight) {
+    return modifierTools.right_default_tool;
   }
   return activeTool;
 }
 
-// -- Text hit testing --
+// -- Hit testing --
+
+// Hovered annotation index (for delete button + cursor)
+let hoveredAnnotationIdx: number | null = null;
+
+function annotationBoundingRect(ann: Annotation): { x: number; y: number; w: number; h: number } | null {
+  switch (ann.type) {
+    case 'text': return textBoundingRect(ann);
+    case 'freehand': {
+      if (ann.points.length === 0) return null;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of ann.points) {
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+      }
+      const pad = ann.width / 2;
+      return { x: minX - pad, y: minY - pad, w: maxX - minX + ann.width, h: maxY - minY + ann.width };
+    }
+    case 'arrow': {
+      const x1 = Math.min(ann.start.x, ann.end.x);
+      const y1 = Math.min(ann.start.y, ann.end.y);
+      const x2 = Math.max(ann.start.x, ann.end.x);
+      const y2 = Math.max(ann.start.y, ann.end.y);
+      const pad = ann.width * 2;
+      return { x: x1 - pad, y: y1 - pad, w: x2 - x1 + pad * 2, h: y2 - y1 + pad * 2 };
+    }
+    case 'oval':
+    case 'rect': {
+      const pad = ann.width / 2;
+      return { x: ann.rect.x - pad, y: ann.rect.y - pad, w: ann.rect.w + ann.width, h: ann.rect.h + ann.width };
+    }
+  }
+}
+
+function hitTestAnnotation(imagePos: Point): number | null {
+  for (let i = undoStack.length - 1; i >= 0; i--) {
+    const r = annotationBoundingRect(undoStack[i]);
+    if (!r) continue;
+    const margin = 6;
+    if (
+      imagePos.x >= r.x - margin && imagePos.x <= r.x + r.w + margin &&
+      imagePos.y >= r.y - margin && imagePos.y <= r.y + r.h + margin
+    ) {
+      return i;
+    }
+  }
+  return null;
+}
+
+function deleteAnnotation(idx: number) {
+  undoStack.splice(idx, 1);
+  redoStack.length = 0;
+  hoveredAnnotationIdx = null;
+  updateUndoRedoButtons();
+  render();
+}
+
+// Returns the screen position of the delete button for the given annotation
+function deleteButtonPos(ann: Annotation): { x: number; y: number } | null {
+  const r = annotationBoundingRect(ann);
+  if (!r) return null;
+  // Top-right corner of the bounding box, in screen coords
+  return {
+    x: imageRect.x + (r.x + r.w) * scale + 4,
+    y: imageRect.y + r.y * scale - 4,
+  };
+}
 
 function textBoundingRect(ann: TextAnnotation): { x: number; y: number; w: number; h: number } {
   // Measure in image-space (no scale transform -- we render at image scale)
@@ -364,7 +463,7 @@ function hitTestText(imagePos: Point): number | null {
 // -- Mouse handlers --
 
 function onMouseDown(e: MouseEvent) {
-  if (e.button !== 0) return;
+  if (e.button !== 0 && e.button !== 2) return;
 
   // Check if click is on toolbar
   const toolbar = document.getElementById('annotation-toolbar')!;
@@ -372,6 +471,15 @@ function onMouseDown(e: MouseEvent) {
   if (e.clientX >= tbRect.left && e.clientX <= tbRect.right &&
       e.clientY >= tbRect.top && e.clientY <= tbRect.bottom) {
     return; // Let toolbar handle it
+  }
+
+  // Check if click is on a delete button
+  if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length) {
+    const bp = deleteButtonPos(undoStack[hoveredAnnotationIdx]);
+    if (bp && Math.hypot(e.clientX - bp.x, e.clientY - bp.y) <= 10) {
+      deleteAnnotation(hoveredAnnotationIdx);
+      return;
+    }
   }
 
   const pos = toImageCoords(e.clientX, e.clientY);
@@ -413,6 +521,7 @@ function onMouseDown(e: MouseEvent) {
   }
 
   isDrawing = true;
+  hoveredAnnotationIdx = null;
   render();
 }
 
@@ -426,7 +535,35 @@ function onMouseMove(e: MouseEvent) {
     return;
   }
 
-  if (!isDrawing || !currentAnnotation) return;
+  if (!isDrawing || !currentAnnotation) {
+    // Hover detection for cursor + delete button
+    const pos = toImageCoords(e.clientX, e.clientY);
+    const prevHovered = hoveredAnnotationIdx;
+    if (pos) {
+      // Check delete button hit first
+      if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length) {
+        const bp = deleteButtonPos(undoStack[hoveredAnnotationIdx]);
+        if (bp && Math.hypot(e.clientX - bp.x, e.clientY - bp.y) <= 10) {
+          canvas.style.cursor = 'pointer';
+          return;
+        }
+      }
+      const textHit = hitTestText(pos);
+      hoveredAnnotationIdx = hitTestAnnotation(pos);
+      if (textHit !== null) {
+        canvas.style.cursor = 'move';
+      } else if (hoveredAnnotationIdx !== null) {
+        canvas.style.cursor = 'default';
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    } else {
+      hoveredAnnotationIdx = null;
+      canvas.style.cursor = 'default';
+    }
+    if (prevHovered !== hoveredAnnotationIdx) render();
+    return;
+  }
 
   const pos = clampToImage(e.clientX, e.clientY);
 
@@ -446,7 +583,7 @@ function onMouseMove(e: MouseEvent) {
 }
 
 function onMouseUp(e: MouseEvent) {
-  if (e.button !== 0) return;
+  if (e.button !== 0 && e.button !== 2) return;
 
   // Finish text drag. Position was mutated in-place during onMouseMove.
   // The flat undo stack model doesn't support undoing in-place edits, so
@@ -754,7 +891,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   canvas.addEventListener('mouseup', onMouseUp);
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    cancelAnnotation();
   });
   document.addEventListener('keydown', onKeyDown);
 

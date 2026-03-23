@@ -24,7 +24,12 @@ let modDefaultSelect: HTMLSelectElement;
 let modShiftSelect: HTMLSelectElement;
 let modCtrlSelect: HTMLSelectElement;
 let modAltSelect: HTMLSelectElement;
+let modRightDefaultSelect: HTMLSelectElement;
+let modRightShiftSelect: HTMLSelectElement;
+let modRightCtrlSelect: HTMLSelectElement;
+let modRightAltSelect: HTMLSelectElement;
 let launchOnStartupCheckbox: HTMLInputElement;
+let explorerContextMenuCheckbox: HTMLInputElement;
 let folderWarning: HTMLSpanElement;
 
 // -- Hotkey recorder --
@@ -40,6 +45,7 @@ const isMac = navigator.platform.toUpperCase().includes('MAC');
 function formatHotkeyDisplay(raw: string): string {
   return raw
     .replace(/CmdOrCtrl/g, isMac ? 'Cmd' : 'Ctrl')
+    .replace(/Backquote/g, '`')
     .split('+')
     .map(p => p.charAt(0).toUpperCase() + p.slice(1))
     .join(' + ');
@@ -125,6 +131,7 @@ function keyToTauriFormat(key: string): string | null {
     'ArrowUp': 'Up', 'ArrowDown': 'Down',
     'ArrowLeft': 'Left', 'ArrowRight': 'Right',
     'Insert': 'Insert',
+    '`': 'Backquote', '~': 'Backquote',
   };
   return specialMap[key] || null;
 }
@@ -180,7 +187,12 @@ function collectConfig(): AppConfig {
     annotate_shift_tool: modShiftSelect.value,
     annotate_ctrl_tool: modCtrlSelect.value,
     annotate_alt_tool: modAltSelect.value,
+    annotate_right_default_tool: modRightDefaultSelect.value,
+    annotate_right_shift_tool: modRightShiftSelect.value,
+    annotate_right_ctrl_tool: modRightCtrlSelect.value,
+    annotate_right_alt_tool: modRightAltSelect.value,
     launch_on_startup: launchOnStartupCheckbox.checked,
+    explorer_context_menu: explorerContextMenuCheckbox.checked,
     hotkey_record: recordHotkey.rawValue,
     recording_format: recordingFormatSelect.value as AppConfig['recording_format'],
     recording_fps: parseInt(recordingFpsSelect.value, 10),
@@ -208,7 +220,12 @@ function applyConfig(config: AppConfig) {
   modShiftSelect.value = config.annotate_shift_tool;
   modCtrlSelect.value = config.annotate_ctrl_tool;
   modAltSelect.value = config.annotate_alt_tool;
+  modRightDefaultSelect.value = config.annotate_right_default_tool;
+  modRightShiftSelect.value = config.annotate_right_shift_tool;
+  modRightCtrlSelect.value = config.annotate_right_ctrl_tool;
+  modRightAltSelect.value = config.annotate_right_alt_tool;
   launchOnStartupCheckbox.checked = config.launch_on_startup;
+  explorerContextMenuCheckbox.checked = config.explorer_context_menu;
   recordHotkey.rawValue = config.hotkey_record;
   recordHotkey.input.value = formatHotkeyDisplay(config.hotkey_record);
   recordingFormatSelect.value = config.recording_format;
@@ -268,7 +285,12 @@ window.addEventListener('DOMContentLoaded', () => {
   modShiftSelect = document.getElementById('mod-shift') as HTMLSelectElement;
   modCtrlSelect = document.getElementById('mod-ctrl') as HTMLSelectElement;
   modAltSelect = document.getElementById('mod-alt') as HTMLSelectElement;
+  modRightDefaultSelect = document.getElementById('mod-right-default') as HTMLSelectElement;
+  modRightShiftSelect = document.getElementById('mod-right-shift') as HTMLSelectElement;
+  modRightCtrlSelect = document.getElementById('mod-right-ctrl') as HTMLSelectElement;
+  modRightAltSelect = document.getElementById('mod-right-alt') as HTMLSelectElement;
   launchOnStartupCheckbox = document.getElementById('launch-on-startup') as HTMLInputElement;
+  explorerContextMenuCheckbox = document.getElementById('explorer-context-menu') as HTMLInputElement;
   folderWarning = document.getElementById('folder-warning') as HTMLSpanElement;
   const recordHotkeyInput = document.getElementById('hotkey-record') as HTMLInputElement;
   recordingFormatSelect = document.getElementById('recording-format') as HTMLSelectElement;
@@ -285,8 +307,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // Checkboxes and selects: save immediately on change
   const immediateElements = [
     formatSelect, captureModeSelect, copyToClipboardCheckbox, saveToDiskCheckbox,
-    annotateCapturesCheckbox, launchOnStartupCheckbox,
+    annotateCapturesCheckbox, launchOnStartupCheckbox, explorerContextMenuCheckbox,
     modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
+    modRightDefaultSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect,
     recordingFormatSelect, recordingFpsSelect,
   ];
   for (const el of immediateElements) {

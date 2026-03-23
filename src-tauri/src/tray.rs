@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{
   AppHandle, Manager,
   menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
-  tray::TrayIconBuilder,
+  tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
 use crate::state::{AppState, LockRecover};
@@ -13,7 +13,7 @@ fn format_hotkey_display(raw: &str) -> String {
   let result = raw.replace("CmdOrCtrl", "Cmd");
   #[cfg(not(target_os = "macos"))]
   let result = raw.replace("CmdOrCtrl", "Ctrl");
-  result
+  result.replace("Backquote", "`")
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
@@ -26,6 +26,14 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   }
   tray.menu(&menu)
     .tooltip("QuickShotter")
+    .show_menu_on_left_click(false)
+    .on_tray_icon_event(|tray, event| {
+      // Left-click tray icon -> open settings (standard Windows tray pattern).
+      // Right-click still shows the context menu (default tray behavior).
+      if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+        crate::commands::show_settings_window(tray.app_handle());
+      }
+    })
     .on_menu_event(move |app, event| {
       match event.id().as_ref() {
         "capture_region" => {
@@ -64,6 +72,20 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::commands::stop_recording(app).await {
               eprintln!("Stop recording failed: {e}");
+            }
+          });
+        }
+        "annotate_file" => {
+          let app = app.clone();
+          tauri::async_runtime::spawn(async move {
+            use tauri_plugin_dialog::DialogExt;
+            if let Some(path) = app.dialog().file()
+              .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
+              .blocking_pick_file()
+            {
+              if let Err(e) = crate::commands::annotate_file_from_path(&app, &std::path::PathBuf::from(path.to_string())) {
+                eprintln!("Annotate file failed: {e}");
+              }
             }
           });
         }
@@ -152,6 +174,7 @@ pub fn build_tray_menu(
   }
 
   builder = builder.item(&PredefinedMenuItem::separator(app)?);
+  builder = builder.item(&MenuItemBuilder::with_id("annotate_file", "Annotate File...").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("exit", "Exit").build(app)?);
 

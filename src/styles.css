@@ -177,6 +177,11 @@ button:hover {
   .section-header { color: #999; border-color: #444; }
 }
 
+.modifier-group {
+  padding-left: 12px;
+  margin-bottom: 12px;
+}
+
 .modifier-row {
   display: flex;
   align-items: center;

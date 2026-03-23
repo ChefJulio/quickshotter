@@ -29,10 +29,21 @@ pub struct AppConfig {
   pub annotate_alt_tool: String,
   #[serde(default = "default_annotate_default_tool")]
   pub annotate_default_tool: String,
+  // Right-click annotation tool mappings
+  #[serde(default = "default_right_default_tool")]
+  pub annotate_right_default_tool: String,
+  #[serde(default = "default_right_shift_tool")]
+  pub annotate_right_shift_tool: String,
+  #[serde(default = "default_right_ctrl_tool")]
+  pub annotate_right_ctrl_tool: String,
+  #[serde(default = "default_right_alt_tool")]
+  pub annotate_right_alt_tool: String,
   #[serde(default = "default_filename_suffix")]
   pub filename_suffix: String,
   #[serde(default)]
   pub launch_on_startup: bool,
+  #[serde(default)]
+  pub explorer_context_menu: bool,
   // Recording settings
   #[serde(default = "default_hotkey_record")]
   pub hotkey_record: String,
@@ -98,11 +109,27 @@ fn default_alt_tool() -> String {
   "text".to_string()
 }
 
+fn default_right_default_tool() -> String {
+  "arrow".to_string()
+}
+
+fn default_right_shift_tool() -> String {
+  "rect".to_string()
+}
+
+fn default_right_ctrl_tool() -> String {
+  "oval".to_string()
+}
+
+fn default_right_alt_tool() -> String {
+  "text".to_string()
+}
+
 impl Default for AppConfig {
   fn default() -> Self {
     Self {
       save_folder: default_save_folder(),
-      hotkey_region: "CmdOrCtrl+Alt+Shift+S".to_string(),
+      hotkey_region: "Alt+Backquote".to_string(),
       hotkey_fullscreen: "CmdOrCtrl+Alt+Shift+D".to_string(),
       hotkey_window: default_hotkey_window(),
       format: "png".to_string(),
@@ -115,8 +142,13 @@ impl Default for AppConfig {
       annotate_ctrl_tool: default_ctrl_tool(),
       annotate_alt_tool: default_alt_tool(),
       annotate_default_tool: default_annotate_default_tool(),
+      annotate_right_default_tool: default_right_default_tool(),
+      annotate_right_shift_tool: default_right_shift_tool(),
+      annotate_right_ctrl_tool: default_right_ctrl_tool(),
+      annotate_right_alt_tool: default_right_alt_tool(),
       filename_suffix: default_filename_suffix(),
       launch_on_startup: false,
+      explorer_context_menu: false,
       hotkey_record: default_hotkey_record(),
       recording_format: default_recording_format(),
       recording_fps: default_recording_fps(),

@@ -24,6 +24,10 @@ pub struct AnnotationConfigDto {
   pub ctrl_tool: String,
   pub alt_tool: String,
   pub default_tool: String,
+  pub right_default_tool: String,
+  pub right_shift_tool: String,
+  pub right_ctrl_tool: String,
+  pub right_alt_tool: String,
 }
 
 /// Returns "instant", "freeze", or "window" so the overlay JS knows which mode.
@@ -398,11 +402,16 @@ pub fn get_annotation_config(app: AppHandle) -> AnnotationConfigDto {
     ctrl_tool: state.config.annotate_ctrl_tool.clone(),
     alt_tool: state.config.annotate_alt_tool.clone(),
     default_tool: state.config.annotate_default_tool.clone(),
+    right_default_tool: state.config.annotate_right_default_tool.clone(),
+    right_shift_tool: state.config.annotate_right_shift_tool.clone(),
+    right_ctrl_tool: state.config.annotate_right_ctrl_tool.clone(),
+    right_alt_tool: state.config.annotate_right_alt_tool.clone(),
   }
 }
 
 /// Annotation editor: save the composited annotated image.
 /// Receives the final image as a base64-encoded PNG from the canvas.
+/// If annotation_source_path is set (file annotation), saves next to the original.
 #[tauri::command]
 pub async fn save_annotated_capture(
   app: AppHandle,
@@ -425,13 +434,113 @@ pub async fn save_annotated_capture(
     .map_err(|e| AppError::Annotation(format!("Failed to decode PNG: {e}")))?
     .to_rgba8();
 
-  let result = finalize_capture(&app, &img)?;
+  // Check if this is a file annotation (save beside original) or a capture annotation
+  let source_path = app.state::<Mutex<AppState>>().lock_or_recover()
+    .annotation_source_path.clone();
+
+  let result = if let Some(ref src) = source_path {
+    save_annotated_beside(src, &img, &app)?
+  } else {
+    finalize_capture(&app, &img)?
+  };
 
   // Close annotation window and clean up state (including is_annotating)
   let app2 = app.clone();
   tauri::async_runtime::spawn(async move { overlay::close_annotation_window(&app2); });
 
   Ok(result)
+}
+
+/// Save annotated image next to the original file as "name-annotated.ext".
+fn save_annotated_beside(
+  source: &PathBuf,
+  img: &RgbaImage,
+  app: &AppHandle,
+) -> Result<CaptureResultDto, AppError> {
+  let stem = source.file_stem()
+    .map(|s| s.to_string_lossy().to_string())
+    .unwrap_or_else(|| "annotated".to_string());
+  let ext = source.extension()
+    .map(|e| e.to_string_lossy().to_string())
+    .unwrap_or_else(|| "png".to_string());
+  let parent = source.parent()
+    .ok_or_else(|| AppError::Annotation("Cannot determine parent directory".to_string()))?;
+
+  let out_name = format!("{stem}-annotated.{ext}");
+  let out_path = parent.join(&out_name);
+
+  // Encode based on extension
+  let dyn_img = image::DynamicImage::ImageRgba8(img.clone());
+  dyn_img.save(&out_path)
+    .map_err(|e| AppError::Annotation(format!("Failed to save annotated image: {e}")))?;
+
+  let filepath_str = out_path.to_string_lossy().to_string();
+
+  // Update history and tray
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.add_to_history(out_path.clone());
+    state.last_saved_path = Some(out_path);
+  }
+  tray::refresh_tray_menu(app);
+  notify_capture(app, Some(&filepath_str));
+
+  // Also copy to clipboard if configured
+  let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
+  let copied = if config.copy_to_clipboard {
+    capture::copy_to_clipboard(img).unwrap_or(());
+    true
+  } else {
+    false
+  };
+
+  Ok(CaptureResultDto { filepath: Some(filepath_str), copied_to_clipboard: copied })
+}
+
+/// Open the annotation editor for an existing image file on disk.
+pub fn annotate_file_from_path(app: &AppHandle, path: &std::path::Path) -> Result<(), AppError> {
+  // Block if already capturing/annotating
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    if state.is_capturing || state.is_annotating || state.is_recording {
+      return Ok(());
+    }
+  }
+
+  let img = image::open(path)
+    .map_err(|e| AppError::Annotation(format!("Failed to open image: {e}")))?
+    .to_rgba8();
+
+  let base64 = capture::image_to_base64_png(&img)?;
+
+  {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.pending_annotation = Some(img);
+    state.pending_annotation_base64 = Some(base64);
+    state.annotation_source_path = Some(path.to_path_buf());
+    state.is_annotating = true;
+  }
+
+  if let Err(e) = overlay::open_annotation_window(app) {
+    let s = app.state::<Mutex<AppState>>();
+    let mut state = s.lock_or_recover();
+    state.is_annotating = false;
+    state.pending_annotation = None;
+    state.pending_annotation_base64 = None;
+    state.annotation_source_path = None;
+    return Err(e);
+  }
+
+  Ok(())
+}
+
+/// Tauri command wrapper for annotate_file_from_path (used by tray file picker).
+#[tauri::command]
+pub async fn annotate_file(app: AppHandle, path: String) -> Result<(), AppError> {
+  annotate_file_from_path(&app, std::path::Path::new(&path))
 }
 
 /// Annotation editor: discard without saving.
@@ -536,6 +645,9 @@ pub async fn save_config(
 
   if old_config.launch_on_startup != new_config.launch_on_startup {
     crate::startup::set_launch_on_startup(&app, new_config.launch_on_startup);
+  }
+  if old_config.explorer_context_menu != new_config.explorer_context_menu {
+    crate::context_menu::set_context_menu(new_config.explorer_context_menu);
   }
   tray::refresh_tray_menu(&app);
 

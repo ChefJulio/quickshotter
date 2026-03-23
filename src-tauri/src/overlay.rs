@@ -209,5 +209,6 @@ pub fn close_annotation_window(app: &AppHandle) {
   let mut state = s.lock_or_recover();
   state.pending_annotation = None;
   state.pending_annotation_base64 = None;
+  state.annotation_source_path = None;
   state.is_annotating = false;
 }

@@ -13,8 +13,13 @@ export interface AppConfig {
   annotate_ctrl_tool: string;
   annotate_alt_tool: string;
   annotate_default_tool: string;
+  annotate_right_default_tool: string;
+  annotate_right_shift_tool: string;
+  annotate_right_ctrl_tool: string;
+  annotate_right_alt_tool: string;
   filename_suffix: string;
   launch_on_startup: boolean;
+  explorer_context_menu: boolean;
   hotkey_record: string;
   recording_format: 'mp4' | 'gif';
   recording_fps: number;
@@ -39,4 +44,8 @@ export interface AnnotationConfig {
   ctrl_tool: string;
   alt_tool: string;
   default_tool: string;
+  right_default_tool: string;
+  right_shift_tool: string;
+  right_ctrl_tool: string;
+  right_alt_tool: string;
 }
