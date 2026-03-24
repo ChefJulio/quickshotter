@@ -134,8 +134,9 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
   // Find overlay's xcap window ID for window detection exclusion.
   // Retry because the window may not be visible to xcap immediately after build.
+  // Use more retries with longer delays -- on boot the system may be slow.
   let mut overlay_id = 0u32;
-  for _ in 0..3 {
+  for _ in 0..10 {
     overlay_id = xcap::Window::all()
       .unwrap_or_default()
       .iter()
@@ -143,10 +144,10 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       .and_then(|w| w.id().ok())
       .unwrap_or(0);
     if overlay_id != 0 { break; }
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(100));
   }
   if overlay_id == 0 {
-    eprintln!("Could not find overlay window ID for exclusion");
+    eprintln!("Warning: Could not find overlay window ID for exclusion (window capture exclusion disabled)");
   }
   app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id = overlay_id;
 
