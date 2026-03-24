@@ -88,6 +88,13 @@ let textDragOriginalPos: Point | null = null; // for undo
 // Toolbar dragging
 let toolbarDragPos: { x: number; y: number } | null = null;
 
+// Crop state
+let isCropping = false;
+let cropRect: { x: number; y: number; w: number; h: number } | null = null;
+let cropDragStart: Point | null = null;
+// Edge/corner handle being resized: 'n','s','e','w','nw','ne','sw','se', or null
+let cropResizeHandle: string | null = null;
+
 // -- Coordinate transforms --
 
 function cssWidth() { return canvas.width / (window.devicePixelRatio || 1); }
@@ -182,6 +189,11 @@ function render() {
       ctx.stroke();
       ctx.restore();
     }
+  }
+
+  // Crop overlay (drawn last, on top of everything)
+  if (isCropping) {
+    drawCropOverlay();
   }
 }
 
@@ -473,6 +485,21 @@ function onMouseDown(e: MouseEvent) {
     return; // Let toolbar handle it
   }
 
+  // Also skip crop bar clicks
+  const cropBar = document.getElementById('crop-bar')!;
+  const cbRect = cropBar.getBoundingClientRect();
+  if (cropBar.style.display !== 'none' &&
+      e.clientX >= cbRect.left && e.clientX <= cbRect.right &&
+      e.clientY >= cbRect.top && e.clientY <= cbRect.bottom) {
+    return;
+  }
+
+  // Crop mode intercepts all mouse events
+  if (isCropping) {
+    if (e.button === 0) onCropMouseDown(e);
+    return;
+  }
+
   // Check if click is on a delete button
   if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length) {
     const bp = deleteButtonPos(undoStack[hoveredAnnotationIdx]);
@@ -526,6 +553,8 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onMouseMove(e: MouseEvent) {
+  if (isCropping) { onCropMouseMove(e); return; }
+
   // Text dragging
   if (draggingTextIdx !== null) {
     const pos = clampToImage(e.clientX, e.clientY);
@@ -584,6 +613,7 @@ function onMouseMove(e: MouseEvent) {
 
 function onMouseUp(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 2) return;
+  if (isCropping) { onCropMouseUp(); return; }
 
   // Finish text drag. Position was mutated in-place during onMouseMove.
   // The flat undo stack model doesn't support undoing in-place edits, so
@@ -711,6 +741,252 @@ function updateUndoRedoButtons() {
   (document.getElementById('btn-redo') as HTMLButtonElement).disabled = redoStack.length === 0;
 }
 
+// -- Crop tool --
+
+function enterCropMode() {
+  isCropping = true;
+  cropRect = { x: 0, y: 0, w: sourceImage.naturalWidth, h: sourceImage.naturalHeight };
+  cropResizeHandle = null;
+  document.getElementById('crop-bar')!.style.display = 'flex';
+  canvas.style.cursor = 'default';
+  render();
+}
+
+function exitCropMode() {
+  isCropping = false;
+  cropRect = null;
+  cropDragStart = null;
+  cropResizeHandle = null;
+  document.getElementById('crop-bar')!.style.display = 'none';
+  canvas.style.cursor = 'default';
+  render();
+}
+
+function applyCrop() {
+  if (!cropRect || cropRect.w < 2 || cropRect.h < 2) { exitCropMode(); return; }
+
+  // Bake current annotations + image into an offscreen canvas, then crop
+  const offscreen = document.createElement('canvas');
+  offscreen.width = sourceImage.naturalWidth;
+  offscreen.height = sourceImage.naturalHeight;
+  const offCtx = offscreen.getContext('2d')!;
+  offCtx.drawImage(sourceImage, 0, 0);
+  for (const ann of undoStack) {
+    drawAnnotation(offCtx, ann);
+  }
+
+  // Crop region (clamped to image bounds)
+  const cx = Math.max(0, Math.round(cropRect.x));
+  const cy = Math.max(0, Math.round(cropRect.y));
+  const cw = Math.min(Math.round(cropRect.w), offscreen.width - cx);
+  const ch = Math.min(Math.round(cropRect.h), offscreen.height - cy);
+  if (cw < 1 || ch < 1) { exitCropMode(); return; }
+
+  // Extract cropped region
+  const cropped = document.createElement('canvas');
+  cropped.width = cw;
+  cropped.height = ch;
+  const croppedCtx = cropped.getContext('2d')!;
+  croppedCtx.drawImage(offscreen, cx, cy, cw, ch, 0, 0, cw, ch);
+
+  // Replace source image with cropped result
+  const dataUrl = cropped.toDataURL('image/png');
+  const newImg = new Image();
+  newImg.onload = () => {
+    sourceImage = newImg;
+    undoStack.length = 0;
+    redoStack.length = 0;
+    updateUndoRedoButtons();
+    computeLayout();
+    exitCropMode();
+  };
+  newImg.src = dataUrl;
+}
+
+function drawCropOverlay() {
+  if (!cropRect) return;
+
+  // Convert image-space crop rect to screen-space
+  const sx = imageRect.x + cropRect.x * scale;
+  const sy = imageRect.y + cropRect.y * scale;
+  const sw = cropRect.w * scale;
+  const sh = cropRect.h * scale;
+
+  // Dim outside crop area
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  // Top
+  ctx.fillRect(imageRect.x, imageRect.y, imageRect.w, sy - imageRect.y);
+  // Bottom
+  ctx.fillRect(imageRect.x, sy + sh, imageRect.w, (imageRect.y + imageRect.h) - (sy + sh));
+  // Left
+  ctx.fillRect(imageRect.x, sy, sx - imageRect.x, sh);
+  // Right
+  ctx.fillRect(sx + sw, sy, (imageRect.x + imageRect.w) - (sx + sw), sh);
+
+  // Crop border
+  ctx.strokeStyle = '#00aaff';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 3]);
+  ctx.strokeRect(sx, sy, sw, sh);
+  ctx.setLineDash([]);
+
+  // Corner/edge handles
+  const hs = 6; // handle size
+  ctx.fillStyle = '#00aaff';
+  const handles = getCropHandlePositions(sx, sy, sw, sh, hs);
+  for (const h of Object.values(handles)) {
+    ctx.fillRect(h.x - hs / 2, h.y - hs / 2, hs, hs);
+  }
+
+  // Dimensions label
+  const dimText = `${Math.round(cropRect.w)} x ${Math.round(cropRect.h)}`;
+  ctx.font = '12px Consolas, monospace';
+  ctx.fillStyle = '#00aaff';
+  ctx.textAlign = 'center';
+  const labelY = sy > 20 ? sy - 6 : sy + sh + 16;
+  ctx.fillText(dimText, sx + sw / 2, labelY);
+  ctx.textAlign = 'start';
+}
+
+function getCropHandlePositions(sx: number, sy: number, sw: number, sh: number, _hs: number) {
+  return {
+    nw: { x: sx, y: sy },
+    n:  { x: sx + sw / 2, y: sy },
+    ne: { x: sx + sw, y: sy },
+    w:  { x: sx, y: sy + sh / 2 },
+    e:  { x: sx + sw, y: sy + sh / 2 },
+    sw: { x: sx, y: sy + sh },
+    s:  { x: sx + sw / 2, y: sy + sh },
+    se: { x: sx + sw, y: sy + sh },
+  };
+}
+
+function hitTestCropHandle(screenX: number, screenY: number): string | null {
+  if (!cropRect) return null;
+  const sx = imageRect.x + cropRect.x * scale;
+  const sy = imageRect.y + cropRect.y * scale;
+  const sw = cropRect.w * scale;
+  const sh = cropRect.h * scale;
+  const tolerance = 8;
+  const handles = getCropHandlePositions(sx, sy, sw, sh, 6);
+  for (const [name, pos] of Object.entries(handles)) {
+    if (Math.abs(screenX - pos.x) <= tolerance && Math.abs(screenY - pos.y) <= tolerance) {
+      return name;
+    }
+  }
+  return null;
+}
+
+function getCropCursor(handle: string | null): string {
+  if (!handle) return cropRect ? 'move' : 'crosshair';
+  const cursors: Record<string, string> = {
+    nw: 'nwse-resize', se: 'nwse-resize',
+    ne: 'nesw-resize', sw: 'nesw-resize',
+    n: 'ns-resize', s: 'ns-resize',
+    e: 'ew-resize', w: 'ew-resize',
+  };
+  return cursors[handle] || 'default';
+}
+
+function onCropMouseDown(e: MouseEvent) {
+  const handle = hitTestCropHandle(e.clientX, e.clientY);
+  if (handle) {
+    cropResizeHandle = handle;
+    cropDragStart = { x: e.clientX, y: e.clientY };
+    return;
+  }
+  // If clicking inside existing crop rect, start move
+  if (cropRect) {
+    const sx = imageRect.x + cropRect.x * scale;
+    const sy = imageRect.y + cropRect.y * scale;
+    const sw = cropRect.w * scale;
+    const sh = cropRect.h * scale;
+    if (e.clientX >= sx && e.clientX <= sx + sw && e.clientY >= sy && e.clientY <= sy + sh) {
+      cropResizeHandle = 'move';
+      cropDragStart = { x: e.clientX, y: e.clientY };
+      return;
+    }
+  }
+  // Start new crop selection
+  const pos = toImageCoords(e.clientX, e.clientY);
+  if (!pos) return;
+  cropDragStart = { x: e.clientX, y: e.clientY };
+  cropRect = { x: pos.x, y: pos.y, w: 0, h: 0 };
+  cropResizeHandle = 'new';
+}
+
+function onCropMouseMove(e: MouseEvent) {
+  if (!cropDragStart) {
+    // Update cursor for handle hover
+    const handle = hitTestCropHandle(e.clientX, e.clientY);
+    if (handle) {
+      canvas.style.cursor = getCropCursor(handle);
+    } else if (cropRect) {
+      const sx = imageRect.x + cropRect.x * scale;
+      const sy = imageRect.y + cropRect.y * scale;
+      const sw = cropRect.w * scale;
+      const sh = cropRect.h * scale;
+      if (e.clientX >= sx && e.clientX <= sx + sw && e.clientY >= sy && e.clientY <= sy + sh) {
+        canvas.style.cursor = 'move';
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    }
+    return;
+  }
+
+  const iw = sourceImage.naturalWidth;
+  const ih = sourceImage.naturalHeight;
+
+  if (cropResizeHandle === 'new') {
+    // Drawing new crop rect
+    const start = toImageCoords(cropDragStart.x, cropDragStart.y);
+    const end = clampToImage(e.clientX, e.clientY);
+    if (start) {
+      cropRect = {
+        x: Math.min(start.x, end.x),
+        y: Math.min(start.y, end.y),
+        w: Math.abs(end.x - start.x),
+        h: Math.abs(end.y - start.y),
+      };
+    }
+  } else if (cropResizeHandle === 'move' && cropRect) {
+    const dx = (e.clientX - cropDragStart.x) / scale;
+    const dy = (e.clientY - cropDragStart.y) / scale;
+    cropRect.x = Math.max(0, Math.min(cropRect.x + dx, iw - cropRect.w));
+    cropRect.y = Math.max(0, Math.min(cropRect.y + dy, ih - cropRect.h));
+    cropDragStart = { x: e.clientX, y: e.clientY };
+  } else if (cropRect && cropResizeHandle) {
+    // Resize via handle
+    const dx = (e.clientX - cropDragStart.x) / scale;
+    const dy = (e.clientY - cropDragStart.y) / scale;
+    const r = { ...cropRect };
+
+    if (cropResizeHandle.includes('w')) { r.x += dx; r.w -= dx; }
+    if (cropResizeHandle.includes('e')) { r.w += dx; }
+    if (cropResizeHandle.includes('n')) { r.y += dy; r.h -= dy; }
+    if (cropResizeHandle.includes('s')) { r.h += dy; }
+
+    // Clamp to image bounds and enforce minimum size
+    if (r.w < 10) { r.w = 10; if (cropResizeHandle.includes('w')) r.x = cropRect.x + cropRect.w - 10; }
+    if (r.h < 10) { r.h = 10; if (cropResizeHandle.includes('n')) r.y = cropRect.y + cropRect.h - 10; }
+    r.x = Math.max(0, r.x);
+    r.y = Math.max(0, r.y);
+    if (r.x + r.w > iw) r.w = iw - r.x;
+    if (r.y + r.h > ih) r.h = ih - r.y;
+
+    cropRect = r;
+    cropDragStart = { x: e.clientX, y: e.clientY };
+  }
+
+  render();
+}
+
+function onCropMouseUp() {
+  cropDragStart = null;
+  cropResizeHandle = null;
+}
+
 // -- Save / Cancel --
 
 let saving = false;
@@ -764,8 +1040,10 @@ function onKeyDown(e: KeyboardEvent) {
   }
 
   if (e.key === 'Escape') {
+    if (isCropping) { exitCropMode(); return; }
     cancelAnnotation();
   } else if (e.key === 'Enter') {
+    if (isCropping) { applyCrop(); return; }
     compositeAndSave();
   } else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
     e.preventDefault();
@@ -787,14 +1065,24 @@ function initToolbar() {
     oval: document.getElementById('tool-oval')!,
     rect: document.getElementById('tool-rect')!,
     text: document.getElementById('tool-text')!,
+    crop: document.getElementById('tool-crop')!,
   };
 
   for (const [tool, btn] of Object.entries(toolBtns)) {
     btn.addEventListener('click', () => {
+      if (tool === 'crop') {
+        if (isCropping) { exitCropMode(); } else { enterCropMode(); }
+        updateToolbarHighlights(toolBtns);
+        return;
+      }
+      if (isCropping) exitCropMode();
       activeTool = tool;
       updateToolbarHighlights(toolBtns);
     });
   }
+
+  document.getElementById('crop-apply')!.addEventListener('click', applyCrop);
+  document.getElementById('crop-cancel')!.addEventListener('click', exitCropMode);
 
   document.getElementById('arrow-style')!.addEventListener('change', (e) => {
     arrowStyle = (e.target as HTMLSelectElement).value;
@@ -847,7 +1135,11 @@ function initToolbar() {
 
 function updateToolbarHighlights(toolBtns: Record<string, HTMLElement>) {
   for (const [tool, btn] of Object.entries(toolBtns)) {
-    btn.classList.toggle('active', tool === activeTool);
+    if (tool === 'crop') {
+      btn.classList.toggle('active', isCropping);
+    } else {
+      btn.classList.toggle('active', !isCropping && tool === activeTool);
+    }
   }
 }
 

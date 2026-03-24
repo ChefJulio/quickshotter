@@ -111,6 +111,24 @@
     .action-btn.cancel { color: #f88; }
     .action-btn.undo-redo { color: #ccc; }
 
+    #crop-bar {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(40, 40, 40, 0.92);
+      border-radius: 8px;
+      padding: 6px 12px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      z-index: 15;
+      font-family: sans-serif;
+      font-size: 12px;
+      color: #ccc;
+    }
+    #crop-bar .action-btn { height: 26px; padding: 0 12px; }
+
     #text-input-container {
       position: absolute;
       z-index: 20;
@@ -162,6 +180,11 @@
         <text x="12" y="18" font-size="16" font-weight="bold" text-anchor="middle" font-family="sans-serif">A</text>
       </svg>
     </button>
+    <button class="tool-btn" id="tool-crop" title="Crop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#c8c8c8" stroke-width="2" stroke-linecap="round">
+        <path d="M6 2v4H2M6 6h12v12h4M18 22v-4h4M18 18H6V6"/>
+      </svg>
+    </button>
 
     <span class="separator">|</span>
 
@@ -190,6 +213,12 @@
 
     <button id="btn-save" class="action-btn save" title="Save (Enter)">Save</button>
     <button id="btn-cancel" class="action-btn cancel" title="Cancel (Escape)">Cancel</button>
+  </div>
+
+  <div id="crop-bar">
+    <span>Drag to select crop area, then apply</span>
+    <button id="crop-apply" class="action-btn save">Apply</button>
+    <button id="crop-cancel" class="action-btn cancel">Cancel</button>
   </div>
 
   <div id="text-input-container" style="display: none;">

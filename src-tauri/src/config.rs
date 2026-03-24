@@ -76,7 +76,7 @@ fn default_capture_mode() -> String {
 }
 
 fn default_fullscreen_mode() -> String {
-  "all".to_string()
+  "current".to_string()
 }
 
 fn default_hotkey_window() -> String {
