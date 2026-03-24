@@ -152,7 +152,11 @@ async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto
     return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
   }
 
-  let screen = capture::capture_all_monitors()?;
+  let fullscreen_mode = app.state::<Mutex<AppState>>().lock_or_recover().config.fullscreen_mode.clone();
+  let screen = match fullscreen_mode.as_str() {
+    "current" => capture::capture_monitor_at_cursor()?,
+    _ => capture::capture_all_monitors()?,
+  };
 
   // Fallback: detect blank screenshot in case permission check passed but
   // capture still returned empty (can happen after app updates on some macOS versions).
@@ -362,6 +366,40 @@ async fn complete_window_capture_inner(
   }
 
   finalize_capture_with_toggle(app, &image, toggle_save)
+}
+
+// -- Monitor selection commands --
+
+#[tauri::command]
+pub fn get_monitor_list() -> Result<Vec<capture::MonitorInfo>, AppError> {
+  capture::get_monitor_info()
+}
+
+#[tauri::command]
+pub async fn complete_select_screen_capture(
+  app: AppHandle,
+  monitor_index: usize,
+) -> Result<CaptureResultDto, AppError> {
+  // Hide overlay first
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+  // Brief delay for overlay to hide
+  let _ = tauri::async_runtime::spawn_blocking(|| {
+    std::thread::sleep(std::time::Duration::from_millis(150));
+  }).await;
+
+  let screen = capture::capture_monitor(monitor_index)?;
+
+  // Close overlay
+  overlay::close_overlay(&app);
+
+  let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
+  if annotate {
+    return open_annotation_for_image(&app, screen.image).await;
+  }
+
+  finalize_capture(&app, &screen.image)
 }
 
 // -- Annotation commands --

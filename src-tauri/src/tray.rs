@@ -47,12 +47,20 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           }
         }
         "capture_fullscreen" => {
-          let app = app.clone();
-          tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::commands::do_fullscreen_capture(&app).await {
-              eprintln!("Fullscreen capture failed: {e}");
+          let fs_mode = app.state::<std::sync::Mutex<crate::state::AppState>>()
+            .lock_or_recover().config.fullscreen_mode.clone();
+          if fs_mode == "select" {
+            if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "select_screen") {
+              eprintln!("Select screen overlay failed: {e}");
             }
-          });
+          } else {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+              if let Err(e) = crate::commands::do_fullscreen_capture(&app).await {
+                eprintln!("Fullscreen capture failed: {e}");
+              }
+            });
+          }
         }
         "record_screen" => {
           let app = app.clone();

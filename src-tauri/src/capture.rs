@@ -169,6 +169,91 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
   })
 }
 
+/// Capture a single monitor by index.
+pub fn capture_monitor(index: usize) -> Result<ScreenCapture, AppError> {
+  let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
+  let m = monitors.get(index).ok_or_else(|| AppError::Capture(format!("Monitor index {} out of range", index)))?;
+  let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
+  let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+  let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+  Ok(ScreenCapture {
+    width: img.width(),
+    height: img.height(),
+    origin_x: x,
+    origin_y: y,
+    image: img,
+  })
+}
+
+/// Find which monitor the cursor is on and capture it.
+pub fn capture_monitor_at_cursor() -> Result<ScreenCapture, AppError> {
+  let (cx, cy) = get_cursor_position()?;
+  let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
+  // Find monitor containing cursor
+  let index = monitors.iter().position(|m| {
+    let Ok(mx) = m.x() else { return false };
+    let Ok(my) = m.y() else { return false };
+    let Ok(mw) = m.width() else { return false };
+    let Ok(mh) = m.height() else { return false };
+    cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32
+  }).unwrap_or(0); // fall back to primary if cursor not found on any
+  capture_monitor(index)
+}
+
+/// Return info about all monitors (bounds + names).
+pub fn get_monitor_info() -> Result<Vec<MonitorInfo>, AppError> {
+  let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
+  let mut result = Vec::new();
+  for (i, m) in monitors.iter().enumerate() {
+    let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
+    let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+    let w = m.width().map_err(|e| AppError::Capture(e.to_string()))?;
+    let h = m.height().map_err(|e| AppError::Capture(e.to_string()))?;
+    result.push(MonitorInfo { index: i, x, y, width: w, height: h });
+  }
+  Ok(result)
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct MonitorInfo {
+  pub index: usize,
+  pub x: i32,
+  pub y: i32,
+  pub width: u32,
+  pub height: u32,
+}
+
+/// Get cursor position (platform-specific).
+#[cfg(target_os = "windows")]
+fn get_cursor_position() -> Result<(i32, i32), AppError> {
+  use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+  use windows::Win32::Foundation::POINT;
+  let mut pt = POINT { x: 0, y: 0 };
+  unsafe {
+    GetCursorPos(&mut pt).map_err(|e| AppError::Capture(format!("GetCursorPos: {e}")))?;
+  }
+  Ok((pt.x, pt.y))
+}
+
+#[cfg(target_os = "macos")]
+fn get_cursor_position() -> Result<(i32, i32), AppError> {
+  // CGEventGetLocation returns the cursor position in global display coordinates
+  use core_graphics::event::CGEvent;
+  use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+  let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    .map_err(|_| AppError::Capture("Failed to create event source".to_string()))?;
+  let event = CGEvent::new(source)
+    .map_err(|_| AppError::Capture("Failed to create event".to_string()))?;
+  let loc = event.location();
+  Ok((loc.x as i32, loc.y as i32))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn get_cursor_position() -> Result<(i32, i32), AppError> {
+  // Fallback: return origin, will default to primary monitor
+  Ok((0, 0))
+}
+
 /// Convert RGBA image to RGB bytes without cloning the source image.
 /// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
 fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {

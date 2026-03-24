@@ -100,6 +100,96 @@ function showRecordingBoundary(x: number, y: number, w: number, h: number) {
   ctx.fillText('REC', x, labelY);
 }
 
+// -- Select screen mode --
+
+interface MonitorInfo {
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+let monitors: MonitorInfo[] = [];
+let hoveredMonitor: number | null = null;
+
+function showSelectScreenOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  canvas.style.cursor = 'pointer';
+  drawMonitorLabels();
+}
+
+function drawMonitorLabels() {
+  const s = xcapScale;
+  for (let i = 0; i < monitors.length; i++) {
+    const m = monitors[i];
+    // Convert absolute screen coords to overlay-local CSS coords
+    const cx = (m.x - overlayOriginX) / s;
+    const cy = (m.y - overlayOriginY) / s;
+    const cw = m.width / s;
+    const ch = m.height / s;
+
+    if (hoveredMonitor === i) {
+      // Bright highlight on hovered monitor
+      ctx.fillStyle = 'rgba(0, 170, 255, 0.15)';
+      ctx.fillRect(cx, cy, cw, ch);
+      ctx.strokeStyle = '#00aaff';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(cx + 1.5, cy + 1.5, cw - 3, ch - 3);
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(cx + 0.5, cy + 0.5, cw - 1, ch - 1);
+    }
+
+    // Label
+    const label = `Screen ${i + 1}`;
+    const sub = `${m.width} x ${m.height}`;
+    ctx.font = 'bold 24px Consolas, monospace';
+    ctx.fillStyle = hoveredMonitor === i ? '#00aaff' : 'rgba(255, 255, 255, 0.7)';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx + cw / 2, cy + ch / 2 - 8);
+    ctx.font = '14px Consolas, monospace';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.fillText(sub, cx + cw / 2, cy + ch / 2 + 16);
+    ctx.textAlign = 'start';
+  }
+}
+
+function onMouseMoveSelectScreen(e: MouseEvent) {
+  const s = xcapScale;
+  const prev = hoveredMonitor;
+  hoveredMonitor = null;
+  for (let i = 0; i < monitors.length; i++) {
+    const m = monitors[i];
+    const cx = (m.x - overlayOriginX) / s;
+    const cy = (m.y - overlayOriginY) / s;
+    const cw = m.width / s;
+    const ch = m.height / s;
+    if (e.clientX >= cx && e.clientX < cx + cw && e.clientY >= cy && e.clientY < cy + ch) {
+      hoveredMonitor = i;
+      break;
+    }
+  }
+  if (hoveredMonitor !== prev) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawMonitorLabels();
+  }
+}
+
+function onMouseDownSelectScreen(e: MouseEvent) {
+  if (e.button === 2) { cancel(); return; }
+  if (e.button !== 0 || hoveredMonitor === null) return;
+  const idx = hoveredMonitor;
+  invoke('complete_select_screen_capture', { monitorIndex: idx }).catch((err) => {
+    console.error('Select screen capture failed:', err);
+    cancel();
+  });
+}
+
 function showWindowOverlay() {
   // Nearly invisible fill -- just enough to capture mouse events on Windows.
   // The user sees through to the real desktop.
@@ -149,6 +239,11 @@ function onMouseDown(e: MouseEvent) {
   }
   if (e.button !== 0) return;
 
+  if (mode === 'select_screen') {
+    onMouseDownSelectScreen(e);
+    return;
+  }
+
   if (mode === 'window') {
     onMouseDownWindow(e.shiftKey, e.altKey);
     return;
@@ -162,6 +257,11 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onMouseMove(e: MouseEvent) {
+  if (mode === 'select_screen') {
+    onMouseMoveSelectScreen(e);
+    return;
+  }
+
   if (mode === 'window') {
     onMouseMoveWindow();
     return;
@@ -428,7 +528,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
   try {
     mode = await invoke<string>('get_overlay_mode');
-    if (mode === 'window') {
+    if (mode === 'select_screen') {
+      const origin = await invoke<[number, number]>('get_overlay_origin');
+      overlayOriginX = origin[0];
+      overlayOriginY = origin[1];
+      monitors = await invoke<MonitorInfo[]>('get_monitor_list');
+      showSelectScreenOverlay();
+    } else if (mode === 'window') {
       const origin = await invoke<[number, number]>('get_overlay_origin');
       overlayOriginX = origin[0];
       overlayOriginY = origin[1];
@@ -449,7 +555,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     // transparent window is shown. Force a redraw now that the window is
     // visible so the dimmed overlay actually appears immediately.
     requestAnimationFrame(() => {
-      if (mode === 'window') {
+      if (mode === 'select_screen') {
+        showSelectScreenOverlay();
+      } else if (mode === 'window') {
         showWindowOverlay();
       } else if (mode === 'record_region') {
         showRecordRegionOverlay();

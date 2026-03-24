@@ -19,6 +19,7 @@ let suffixInput: HTMLInputElement;
 let copyToClipboardCheckbox: HTMLInputElement;
 let saveToDiskCheckbox: HTMLInputElement;
 let captureModeSelect: HTMLSelectElement;
+let fullscreenModeSelect: HTMLSelectElement;
 let annotateCapturesCheckbox: HTMLInputElement;
 let modDefaultSelect: HTMLSelectElement;
 let modShiftSelect: HTMLSelectElement;
@@ -182,6 +183,7 @@ function collectConfig(): AppConfig {
     copy_to_clipboard: copyToClipboardCheckbox.checked,
     save_to_disk: saveToDiskCheckbox.checked,
     capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
+    fullscreen_mode: fullscreenModeSelect.value as AppConfig['fullscreen_mode'],
     annotate_captures: annotateCapturesCheckbox.checked,
     annotate_default_tool: modDefaultSelect.value,
     annotate_shift_tool: modShiftSelect.value,
@@ -215,6 +217,7 @@ function applyConfig(config: AppConfig) {
   copyToClipboardCheckbox.checked = config.copy_to_clipboard;
   saveToDiskCheckbox.checked = config.save_to_disk;
   captureModeSelect.value = config.capture_mode;
+  fullscreenModeSelect.value = config.fullscreen_mode;
   annotateCapturesCheckbox.checked = config.annotate_captures;
   modDefaultSelect.value = config.annotate_default_tool;
   modShiftSelect.value = config.annotate_shift_tool;
@@ -280,6 +283,7 @@ window.addEventListener('DOMContentLoaded', () => {
   copyToClipboardCheckbox = document.getElementById('copy-to-clipboard') as HTMLInputElement;
   saveToDiskCheckbox = document.getElementById('save-to-disk') as HTMLInputElement;
   captureModeSelect = document.getElementById('capture-mode') as HTMLSelectElement;
+  fullscreenModeSelect = document.getElementById('fullscreen-mode') as HTMLSelectElement;
   annotateCapturesCheckbox = document.getElementById('annotate-captures') as HTMLInputElement;
   modDefaultSelect = document.getElementById('mod-default') as HTMLSelectElement;
   modShiftSelect = document.getElementById('mod-shift') as HTMLSelectElement;
@@ -306,7 +310,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Checkboxes and selects: save immediately on change
   const immediateElements = [
-    formatSelect, captureModeSelect, copyToClipboardCheckbox, saveToDiskCheckbox,
+    formatSelect, captureModeSelect, fullscreenModeSelect, copyToClipboardCheckbox, saveToDiskCheckbox,
     annotateCapturesCheckbox, launchOnStartupCheckbox, explorerContextMenuCheckbox,
     modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
     modRightDefaultSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect,

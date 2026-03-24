@@ -3,6 +3,7 @@
 /// Handles Windows registry, macOS LaunchAgents, and Linux XDG autostart.
 
 use tauri::AppHandle;
+#[cfg(not(debug_assertions))]
 use tauri_plugin_autostart::ManagerExt;
 
 pub fn set_launch_on_startup(app: &AppHandle, enabled: bool) {

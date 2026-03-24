@@ -88,6 +88,8 @@ pub fn run() {
       commands::get_recording_state,
       commands::reveal_file,
       commands::annotate_file,
+      commands::get_monitor_list,
+      commands::complete_select_screen_capture,
     ])
     .setup(|app| {
       let config = config::load_config(&app.handle());
