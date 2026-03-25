@@ -37,30 +37,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     .on_menu_event(move |app, event| {
       match event.id().as_ref() {
         "capture_region" => {
-          if let Err(e) = crate::overlay::open_overlay(&app) {
-            eprintln!("Region capture failed: {e}");
-          }
+          crate::commands::delayed_region_capture(&app);
         }
         "capture_window" => {
-          if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "window") {
-            eprintln!("Window capture failed: {e}");
-          }
+          crate::commands::delayed_window_capture(&app);
         }
         "capture_fullscreen" => {
-          let fs_mode = app.state::<std::sync::Mutex<crate::state::AppState>>()
-            .lock_or_recover().config.fullscreen_mode.clone();
-          if fs_mode == "select" {
-            if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "select_screen") {
-              eprintln!("Select screen overlay failed: {e}");
-            }
-          } else {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-              if let Err(e) = crate::commands::do_fullscreen_capture(&app).await {
-                eprintln!("Fullscreen capture failed: {e}");
-              }
-            });
-          }
+          crate::commands::delayed_fullscreen_capture(&app);
         }
         "record_screen" => {
           let app = app.clone();
@@ -84,9 +67,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           });
         }
         "ocr_region" => {
-          if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "ocr") {
-            eprintln!("OCR overlay failed: {e}");
-          }
+          crate::commands::delayed_ocr_capture(&app);
         }
         "annotate_file" => {
           let app = app.clone();

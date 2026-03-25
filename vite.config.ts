@@ -13,6 +13,8 @@ export default defineConfig(async () => ({
         overlay: resolve(__dirname, "overlay.html"),
         annotation: resolve(__dirname, "annotation.html"),
         "recording-indicator": resolve(__dirname, "recording-indicator.html"),
+        countdown: resolve(__dirname, "countdown.html"),
+        "delay-border": resolve(__dirname, "delay-border.html"),
       },
     },
   },

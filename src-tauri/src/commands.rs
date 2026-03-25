@@ -32,6 +32,11 @@ pub struct AnnotationConfigDto {
 
 /// Returns "instant", "freeze", or "window" so the overlay JS knows which mode.
 #[tauri::command]
+pub fn get_capture_delay(app: AppHandle) -> u32 {
+  app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay
+}
+
+#[tauri::command]
 pub fn get_overlay_mode(app: AppHandle) -> String {
   app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone()
 }
@@ -98,6 +103,290 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     filepath: filepath_str,
     copied_to_clipboard: copied,
   })
+}
+
+
+/// Prepare a delayed capture: save params, close overlay, open countdown window.
+/// The countdown window self-drives its timer and calls execute_delayed_capture when done.
+#[tauri::command]
+pub async fn prepare_delayed_capture(
+  app: AppHandle,
+  params: serde_json::Value,
+  pos_x: f64,
+  pos_y: f64,
+  sel_x: Option<f64>,
+  sel_y: Option<f64>,
+  sel_w: Option<f64>,
+  sel_h: Option<f64>,
+) -> Result<(), AppError> {
+  // Save capture params
+  app.state::<Mutex<AppState>>().lock_or_recover().delayed_capture = Some(params);
+
+  // Close the overlay so the user can interact with their desktop
+  overlay::close_overlay(&app);
+
+  // Clean up any leftover countdown window from a previous capture
+  if let Some(w) = app.get_webview_window("countdown") {
+    w.destroy().ok();
+  }
+
+  // Brief pause for overlay to de-render
+  let _ = tauri::async_runtime::spawn_blocking(|| {
+    std::thread::sleep(std::time::Duration::from_millis(150));
+  }).await;
+
+  // Convert overlay-local CSS coords to screen coords by adding desktop origin.
+  // The overlay is positioned at desktop bounds origin.
+  let (bounds_x, bounds_y) = capture::get_desktop_bounds()
+    .map(|b| (b.x, b.y))
+    .unwrap_or((0, 0));
+  let screen_x = pos_x + bounds_x as f64;
+  let screen_y = pos_y + bounds_y as f64;
+
+  // Register a temporary global ESC shortcut to cancel the countdown.
+  // This works regardless of which window has focus.
+  {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+    let esc: Shortcut = "Escape".parse().unwrap();
+    let app2 = app.clone();
+    app.global_shortcut().on_shortcut(esc, move |_app, _shortcut, _event| {
+      cancel_delayed_capture(app2.clone());
+      // Unregister ESC shortcut (cleanup happens in cancel/execute)
+    }).ok();
+  }
+
+  // Open a small countdown window near the selection
+  use tauri::{WebviewUrl, WebviewWindowBuilder};
+  WebviewWindowBuilder::new(&app, "countdown", WebviewUrl::App("countdown.html".into()))
+    .title("Countdown")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .resizable(false)
+    .inner_size(80.0, 80.0)
+    .position(screen_x, screen_y)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| AppError::Capture(format!("Failed to open countdown: {e}")))?;
+
+  // Create a selection border window if selection bounds were provided
+  if let (Some(sx), Some(sy), Some(sw), Some(sh)) = (sel_x, sel_y, sel_w, sel_h) {
+    if sw > 0.0 && sh > 0.0 {
+      let bx = sx + bounds_x as f64;
+      let by = sy + bounds_y as f64;
+      // Offset slightly outside the selection (border is 2px, add 3px padding)
+      let pad = 3.0;
+      WebviewWindowBuilder::new(&app, "delay-border", WebviewUrl::App("delay-border.html".into()))
+        .title("Selection")
+        .transparent(true)
+        .decorations(false)
+        .shadow(false)
+        .always_on_top(true)
+        .resizable(false)
+        .inner_size(sw + pad * 2.0, sh + pad * 2.0)
+        .position(bx - pad, by - pad)
+        .skip_taskbar(true)
+        .build()
+        .ok(); // Non-critical, don't fail the capture if border window fails
+    }
+  }
+
+  Ok(())
+}
+
+/// Cancel a delayed capture (e.g. user pressed ESC during countdown).
+#[tauri::command]
+pub fn cancel_delayed_capture(app: AppHandle) {
+  app.state::<Mutex<AppState>>().lock_or_recover().delayed_capture = None;
+  if let Some(w) = app.get_webview_window("countdown") {
+    w.hide().ok();
+    w.destroy().ok();
+  }
+  if let Some(w) = app.get_webview_window("delay-border") {
+    w.hide().ok();
+    w.destroy().ok();
+  }
+  // Unregister ESC and re-register all hotkeys on a deferred task
+  // (can't safely unregister_all from inside a shortcut handler)
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move {
+    // Small delay to let the current shortcut handler finish
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+      std::thread::sleep(std::time::Duration::from_millis(50));
+    }).await;
+    crate::hotkeys::unregister_all(&app2);
+    if let Err(e) = crate::hotkeys::register_hotkeys(&app2) {
+      eprintln!("hotkey re-register failed: {e}");
+    }
+  });
+}
+
+/// Execute a delayed capture using previously saved params. Called by the countdown window.
+#[tauri::command]
+pub async fn execute_delayed_capture(app: AppHandle) -> Result<(), AppError> {
+  // Close countdown and border windows
+  if let Some(w) = app.get_webview_window("countdown") {
+    w.destroy().ok();
+  }
+  if let Some(w) = app.get_webview_window("delay-border") {
+    w.destroy().ok();
+  }
+  // Unregister the temporary ESC shortcut
+  {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if let Ok(esc) = "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+      app.global_shortcut().unregister(esc).ok();
+    }
+  }
+
+  let params = app.state::<Mutex<AppState>>().lock_or_recover().delayed_capture.take();
+  let params = match params {
+    Some(p) => p,
+    None => return Ok(()),
+  };
+
+  let mode = params["mode"].as_str().unwrap_or("");
+
+  match mode {
+    "region" => {
+      let x1 = params["x1"].as_u64().unwrap_or(0) as u32;
+      let y1 = params["y1"].as_u64().unwrap_or(0) as u32;
+      let x2 = params["x2"].as_u64().unwrap_or(0) as u32;
+      let y2 = params["y2"].as_u64().unwrap_or(0) as u32;
+      let force_annotate = params["forceAnnotate"].as_bool().unwrap_or(false);
+      let toggle_save = params["toggleSave"].as_bool().unwrap_or(false);
+      complete_region_capture(app, x1, y1, x2, y2, Some(force_annotate), Some(toggle_save)).await?;
+    }
+    "window" => {
+      let left = params["left"].as_i64().unwrap_or(0) as i32;
+      let top = params["top"].as_i64().unwrap_or(0) as i32;
+      let right = params["right"].as_i64().unwrap_or(0) as i32;
+      let bottom = params["bottom"].as_i64().unwrap_or(0) as i32;
+      let force_annotate = params["forceAnnotate"].as_bool().unwrap_or(false);
+      let toggle_save = params["toggleSave"].as_bool().unwrap_or(false);
+      complete_window_capture(app, left, top, right, bottom, Some(force_annotate), Some(toggle_save)).await?;
+    }
+    "fullscreen" => {
+      do_fullscreen_capture(&app).await?;
+    }
+    "ocr" => {
+      let x1 = params["x1"].as_u64().unwrap_or(0) as u32;
+      let y1 = params["y1"].as_u64().unwrap_or(0) as u32;
+      let x2 = params["x2"].as_u64().unwrap_or(0) as u32;
+      let y2 = params["y2"].as_u64().unwrap_or(0) as u32;
+      complete_ocr_capture(app, x1, y1, x2, y2).await?;
+    }
+    "select_screen" => {
+      let idx = params["monitorIndex"].as_u64().unwrap_or(0) as usize;
+      complete_select_screen_capture(app, idx).await?;
+    }
+    _ => {}
+  }
+
+  Ok(())
+}
+
+/// Delayed capture entry points -- used by both hotkey and tray handlers.
+/// Centralizes the delay-then-capture pattern so callers don't duplicate it.
+
+pub fn delayed_region_capture(app: &AppHandle) {
+  // No pre-overlay delay for region -- delay happens after selection
+  if let Err(e) = overlay::open_overlay(app) {
+    eprintln!("Region capture failed: {e}");
+  }
+}
+
+pub fn delayed_window_capture(app: &AppHandle) {
+  // No pre-overlay delay for window -- delay happens after selection
+  if let Err(e) = overlay::open_overlay_with_mode(app, "window") {
+    eprintln!("Window capture failed: {e}");
+  }
+}
+
+pub fn delayed_fullscreen_capture(app: &AppHandle) {
+  let (mode, delay) = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    (state.config.fullscreen_mode.clone(), state.config.capture_delay)
+  };
+
+  if mode == "select" {
+    // Select screen uses overlay — delay handled in captureWithDelay on frontend
+    if let Err(e) = overlay::open_overlay_with_mode(app, "select_screen") {
+      eprintln!("Select screen overlay failed: {e}");
+    }
+    return;
+  }
+
+  if delay > 0 {
+    // Prevent double-fire: if a delayed capture is already pending, ignore
+    if app.state::<Mutex<AppState>>().lock_or_recover().delayed_capture.is_some() {
+      return;
+    }
+
+    // Clean up any leftover countdown from a previous capture
+    if let Some(w) = app.get_webview_window("countdown") { w.hide().ok(); w.destroy().ok(); }
+    if let Some(w) = app.get_webview_window("delay-border") { w.hide().ok(); w.destroy().ok(); }
+
+    // Detect which monitor the cursor is on NOW (before the countdown runs)
+    // so "current screen" captures the right one even if the user moves the cursor.
+    // Extract position data synchronously (xcap::Monitor is not Send).
+    let (cursor_monitor_idx, countdown_x, countdown_y) = {
+      let monitors = xcap::Monitor::all().unwrap_or_default();
+      let (cx, cy) = capture::get_cursor_position_public();
+      let idx = monitors.iter().position(|m| {
+        let Ok(mx) = m.x() else { return false };
+        let Ok(my) = m.y() else { return false };
+        let Ok(mw) = m.width() else { return false };
+        let Ok(mh) = m.height() else { return false };
+        cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32
+      }).unwrap_or(0);
+      // Position is in absolute screen coords, but prepare_delayed_capture
+      // adds desktop bounds origin (for overlay-relative CSS coords), so
+      // subtract bounds here to compensate.
+      let (bx, by) = capture::get_desktop_bounds()
+        .map(|b| (b.x as f64, b.y as f64))
+        .unwrap_or((0.0, 0.0));
+      let (px, py) = if let Some(m) = monitors.get(idx) {
+        let mx = m.x().unwrap_or(0) as f64;
+        let my = m.y().unwrap_or(0) as f64;
+        (mx + 16.0 - bx, my + 16.0 - by)
+      } else {
+        (16.0 - bx, 16.0 - by)
+      };
+      (idx, px, py)
+    };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+      // For "current" mode, save the specific monitor index so it captures
+      // the right screen even if the cursor moves during countdown.
+      let params = if mode == "current" {
+        serde_json::json!({ "mode": "select_screen", "monitorIndex": cursor_monitor_idx })
+      } else {
+        serde_json::json!({ "mode": "fullscreen" })
+      };
+
+      if let Err(e) = prepare_delayed_capture(app, params, countdown_x, countdown_y, None, None, None, None).await {
+        eprintln!("Fullscreen delayed capture failed: {e}");
+      }
+    });
+  } else {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+      if let Err(e) = do_fullscreen_capture(&app).await {
+        eprintln!("Fullscreen capture failed: {e}");
+      }
+    });
+  }
+}
+
+pub fn delayed_ocr_capture(app: &AppHandle) {
+  // No pre-overlay delay for OCR -- delay happens after selection
+  if let Err(e) = overlay::open_overlay_with_mode(app, "ocr") {
+    eprintln!("OCR overlay failed: {e}");
+  }
 }
 
 // -- Capture commands --
@@ -784,6 +1073,12 @@ pub async fn save_config(
   match new_config.format.as_str() {
     "png" | "jpg" | "jpeg" | "webp" => {}
     other => return Err(AppError::Config(format!("Invalid image format: {other}"))),
+  }
+
+  // Validate capture delay
+  match new_config.capture_delay {
+    0 | 3 | 5 | 10 => {}
+    other => return Err(AppError::Config(format!("Invalid capture delay: {other}"))),
   }
 
   // Validate capture_mode

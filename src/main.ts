@@ -20,6 +20,7 @@ let copyToClipboardCheckbox: HTMLInputElement;
 let saveToDiskCheckbox: HTMLInputElement;
 let captureModeSelect: HTMLSelectElement;
 let fullscreenModeSelect: HTMLSelectElement;
+let captureDelaySelect: HTMLSelectElement;
 let annotateCapturesCheckbox: HTMLInputElement;
 let modDefaultSelect: HTMLSelectElement;
 let modShiftSelect: HTMLSelectElement;
@@ -185,6 +186,7 @@ function collectConfig(): AppConfig {
     save_to_disk: saveToDiskCheckbox.checked,
     capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
     fullscreen_mode: fullscreenModeSelect.value as AppConfig['fullscreen_mode'],
+    capture_delay: parseInt(captureDelaySelect.value, 10) || 0,
     annotate_captures: annotateCapturesCheckbox.checked,
     annotate_default_tool: modDefaultSelect.value,
     annotate_shift_tool: modShiftSelect.value,
@@ -220,6 +222,8 @@ function applyConfig(config: AppConfig) {
   saveToDiskCheckbox.checked = config.save_to_disk;
   captureModeSelect.value = config.capture_mode;
   fullscreenModeSelect.value = config.fullscreen_mode;
+  captureDelaySelect.value = String(config.capture_delay);
+  updateDelayState();
   annotateCapturesCheckbox.checked = config.annotate_captures;
   modDefaultSelect.value = config.annotate_default_tool;
   modShiftSelect.value = config.annotate_shift_tool;
@@ -239,6 +243,17 @@ function applyConfig(config: AppConfig) {
   recordingFpsSelect.value = String(config.recording_fps);
   gifMaxDurationInput.value = String(config.gif_max_duration);
   gifMaxWidthInput.value = String(config.gif_max_width);
+}
+
+function updateDelayState() {
+  const isFreeze = captureModeSelect.value === 'freeze';
+  captureDelaySelect.disabled = isFreeze;
+  if (isFreeze) {
+    captureDelaySelect.value = '0';
+    captureDelaySelect.title = 'Delay is only available in Instant capture mode';
+  } else {
+    captureDelaySelect.title = '';
+  }
 }
 
 async function autoSave() {
@@ -288,6 +303,7 @@ window.addEventListener('DOMContentLoaded', () => {
   saveToDiskCheckbox = document.getElementById('save-to-disk') as HTMLInputElement;
   captureModeSelect = document.getElementById('capture-mode') as HTMLSelectElement;
   fullscreenModeSelect = document.getElementById('fullscreen-mode') as HTMLSelectElement;
+  captureDelaySelect = document.getElementById('capture-delay') as HTMLSelectElement;
   annotateCapturesCheckbox = document.getElementById('annotate-captures') as HTMLInputElement;
   modDefaultSelect = document.getElementById('mod-default') as HTMLSelectElement;
   modShiftSelect = document.getElementById('mod-shift') as HTMLSelectElement;
@@ -316,7 +332,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Checkboxes and selects: save immediately on change
   const immediateElements = [
-    formatSelect, captureModeSelect, fullscreenModeSelect, copyToClipboardCheckbox, saveToDiskCheckbox,
+    formatSelect, captureModeSelect, fullscreenModeSelect, captureDelaySelect, copyToClipboardCheckbox, saveToDiskCheckbox,
     annotateCapturesCheckbox, launchOnStartupCheckbox, explorerContextMenuCheckbox,
     modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
     modRightDefaultSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect,
@@ -325,6 +341,9 @@ window.addEventListener('DOMContentLoaded', () => {
   for (const el of immediateElements) {
     el.addEventListener('change', autoSave);
   }
+
+  // When capture mode changes, update delay dropdown availability
+  captureModeSelect.addEventListener('change', updateDelayState);
 
   // Text/number inputs: save on blur only (change event) to avoid reverting
   // the field mid-typing when an intermediate value fails validation

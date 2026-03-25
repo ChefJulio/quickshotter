@@ -21,6 +21,7 @@ export interface AppConfig {
   launch_on_startup: boolean;
   explorer_context_menu: boolean;
   fullscreen_mode: 'all' | 'current' | 'select';
+  capture_delay: number;
   hotkey_ocr: string;
   hotkey_record: string;
   recording_format: 'mp4' | 'gif';

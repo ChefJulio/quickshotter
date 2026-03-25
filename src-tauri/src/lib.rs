@@ -65,6 +65,10 @@ pub fn run() {
     .plugin(tauri_plugin_updater::Builder::new().build())
     .plugin(tauri_plugin_process::init())
     .invoke_handler(tauri::generate_handler![
+      commands::get_capture_delay,
+      commands::prepare_delayed_capture,
+      commands::execute_delayed_capture,
+      commands::cancel_delayed_capture,
       commands::trigger_region_capture,
       commands::trigger_fullscreen_capture,
       commands::complete_region_capture,

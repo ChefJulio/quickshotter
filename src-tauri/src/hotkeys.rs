@@ -40,47 +40,28 @@ fn register_hotkeys_from_config(
   app.global_shortcut().on_shortcut(region_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
-      if let Err(e) = crate::overlay::open_overlay(&app) {
-        eprintln!("Region capture failed: {e}");
-      }
+      crate::commands::delayed_region_capture(&app);
     }
   })?;
 
   app.global_shortcut().on_shortcut(fullscreen_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
-      let mode = app.state::<std::sync::Mutex<crate::state::AppState>>()
-        .lock_or_recover().config.fullscreen_mode.clone();
-      if mode == "select" {
-        if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "select_screen") {
-          eprintln!("Select screen overlay failed: {e}");
-        }
-      } else {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-          if let Err(e) = crate::commands::do_fullscreen_capture(&app).await {
-            eprintln!("Fullscreen capture failed: {e}");
-          }
-        });
-      }
+      crate::commands::delayed_fullscreen_capture(&app);
     }
   })?;
 
   app.global_shortcut().on_shortcut(window_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
-      if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "window") {
-        eprintln!("Window capture failed: {e}");
-      }
+      crate::commands::delayed_window_capture(&app);
     }
   })?;
 
   app.global_shortcut().on_shortcut(ocr_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
-      if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "ocr") {
-        eprintln!("OCR overlay failed: {e}");
-      }
+      crate::commands::delayed_ocr_capture(&app);
     }
   })?;
 

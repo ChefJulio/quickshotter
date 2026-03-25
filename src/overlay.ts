@@ -80,6 +80,7 @@ function showOcrOverlay() {
   ctx.textAlign = 'start';
 }
 
+
 function showRecordRegionOverlay() {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -194,10 +195,16 @@ function onMouseDownSelectScreen(e: MouseEvent) {
   if (e.button === 2) { cancel(); return; }
   if (e.button !== 0 || hoveredMonitor === null) return;
   const idx = hoveredMonitor;
-  invoke('complete_select_screen_capture', { monitorIndex: idx }).catch((err) => {
-    console.error('Select screen capture failed:', err);
-    cancel();
-  });
+  const m = monitors[idx];
+  const s = xcapScale;
+  const cssX1 = (m.x - overlayOriginX) / s;
+  const cssY1 = (m.y - overlayOriginY) / s;
+  const cssX2 = cssX1 + m.width / s;
+  const cssY2 = cssY1 + m.height / s;
+  captureWithDelay(cssX1, cssY1, cssX2, cssY2,
+    { mode: 'select_screen', monitorIndex: idx },
+    () => invoke('complete_select_screen_capture', { monitorIndex: idx })
+  );
 }
 
 function showWindowOverlay() {
@@ -384,16 +391,61 @@ async function onMouseUp(e: MouseEvent) {
     }
     return;
   } else if (mode === 'ocr') {
-    invoke('complete_ocr_capture', { x1, y1, x2, y2 }).catch((e) => {
-      console.error('OCR capture failed:', e);
-      cancel();
-    });
+    captureWithDelay(cssX1, cssY1, cssX2, cssY2,
+      { mode: 'ocr', x1, y1, x2, y2 },
+      () => invoke('complete_ocr_capture', { x1, y1, x2, y2 })
+    );
   } else {
-    invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: e.shiftKey, toggleSave: e.altKey }).catch((e) => {
-      console.error('Region capture failed:', e);
+    const shiftKey = e.shiftKey;
+    const altKey = e.altKey;
+    captureWithDelay(cssX1, cssY1, cssX2, cssY2,
+      { mode: 'region', x1, y1, x2, y2, forceAnnotate: shiftKey, toggleSave: altKey },
+      () => invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: shiftKey, toggleSave: altKey })
+    );
+  }
+}
+
+// -- Countdown delay before capture --
+
+async function captureWithDelay(
+  cssX1: number, cssY1: number, _cssX2: number, _cssY2: number,
+  captureParams: Record<string, unknown>,
+  captureAction: () => Promise<unknown>,
+) {
+  let delay: number;
+  try {
+    delay = await invoke<number>('get_capture_delay');
+  } catch {
+    delay = 0;
+  }
+
+  if (delay <= 0) {
+    captureAction().catch((e) => {
+      console.error('Capture failed:', e);
       cancel();
     });
+    return;
   }
+
+  // Close overlay and open a small countdown window + selection border.
+  // Position countdown above-left of selection, pushed inside if at screen edge.
+  const pad = 8;
+  let posX = cssX1 - pad;
+  let posY = cssY1 - 80 - pad;
+  if (posY < 0) posY = cssY1 + pad;
+  if (posX < 0) posX = cssX1 + pad;
+
+  invoke('prepare_delayed_capture', {
+    params: captureParams,
+    posX,
+    posY,
+    selX: cssX1,
+    selY: cssY1,
+    selW: _cssX2 - cssX1,
+    selH: _cssY2 - cssY1,
+  }).catch((e) => {
+    console.error('Prepare delayed capture failed:', e);
+  });
 }
 
 function drawSelection() {
@@ -495,12 +547,13 @@ function drawWindowHighlight() {
 }
 
 function onMouseDownWindow(shiftKey: boolean, altKey: boolean) {
-  if (!highlightPhysical) return;
-  // Send physical pixel coords directly to Rust
-  invoke('complete_window_capture', { ...highlightPhysical, forceAnnotate: shiftKey, toggleSave: altKey }).catch((e) => {
-    console.error('Window capture failed:', e);
-    cancel();
-  });
+  if (!highlightPhysical || !highlightRect) return;
+  const { x, y, w, h } = highlightRect;
+  const phys = { ...highlightPhysical };
+  captureWithDelay(x, y, x + w, y + h,
+    { mode: 'window', ...phys, forceAnnotate: shiftKey, toggleSave: altKey },
+    () => invoke('complete_window_capture', { ...phys, forceAnnotate: shiftKey, toggleSave: altKey })
+  );
 }
 
 // -- Keyboard --

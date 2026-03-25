@@ -223,6 +223,11 @@ pub struct MonitorInfo {
   pub height: u32,
 }
 
+/// Get cursor position, returning (0,0) on failure.
+pub fn get_cursor_position_public() -> (i32, i32) {
+  get_cursor_position().unwrap_or((0, 0))
+}
+
 /// Get cursor position (platform-specific).
 #[cfg(target_os = "windows")]
 fn get_cursor_position() -> Result<(i32, i32), AppError> {

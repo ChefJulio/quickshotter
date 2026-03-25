@@ -28,6 +28,8 @@ pub struct AppState {
   pub pending_annotation_base64: Option<String>,
   // When annotating a file from disk, stores the source path for save-beside behavior
   pub annotation_source_path: Option<PathBuf>,
+  // Delayed capture: saved params while countdown window is showing
+  pub delayed_capture: Option<serde_json::Value>,
   // Recording state
   pub is_recording: bool,
   pub recording_stop_signal: Option<Arc<AtomicBool>>,
@@ -51,6 +53,7 @@ impl AppState {
       pending_annotation: None,
       pending_annotation_base64: None,
       annotation_source_path: None,
+      delayed_capture: None,
       is_recording: false,
       recording_stop_signal: None,
       recording_region: None,

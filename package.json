@@ -1,7 +1,7 @@
 {
   "name": "quickshotter",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
