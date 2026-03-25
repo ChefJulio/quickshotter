@@ -237,15 +237,28 @@ fn get_cursor_position() -> Result<(i32, i32), AppError> {
 
 #[cfg(target_os = "macos")]
 fn get_cursor_position() -> Result<(i32, i32), AppError> {
-  // CGEventGetLocation returns the cursor position in global display coordinates
-  use core_graphics::event::CGEvent;
-  use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-  let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-    .map_err(|_| AppError::Capture("Failed to create event source".to_string()))?;
-  let event = CGEvent::new(source)
-    .map_err(|_| AppError::Capture("Failed to create event".to_string()))?;
-  let loc = event.location();
-  Ok((loc.x as i32, loc.y as i32))
+  // Use CoreGraphics FFI directly to avoid adding core-graphics crate dependency.
+  // NSEvent.mouseLocation returns cursor position in screen coordinates.
+  #[repr(C)]
+  #[derive(Copy, Clone)]
+  struct CGPoint { x: f64, y: f64 }
+
+  #[link(name = "CoreGraphics", kind = "framework")]
+  extern "C" {
+    fn CGEventCreate(source: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
+    fn CFRelease(cf: *const std::ffi::c_void);
+  }
+
+  unsafe {
+    let event = CGEventCreate(std::ptr::null());
+    if event.is_null() {
+      return Err(AppError::Capture("CGEventCreate returned null".to_string()));
+    }
+    let loc = CGEventGetLocation(event);
+    CFRelease(event);
+    Ok((loc.x as i32, loc.y as i32))
+  }
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]

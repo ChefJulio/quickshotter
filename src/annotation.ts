@@ -345,6 +345,17 @@ function drawRect(c: CanvasRenderingContext2D, ann: RectAnnotation) {
 
 function drawText(c: CanvasRenderingContext2D, ann: TextAnnotation) {
   c.font = `${ann.fontSize}px sans-serif`;
+  const metrics = c.measureText(ann.text);
+  const ascent = metrics.actualBoundingBoxAscent ?? ann.fontSize * 0.8;
+  const descent = metrics.actualBoundingBoxDescent ?? ann.fontSize * 0.2;
+  const pad = Math.round(ann.fontSize * 0.15);
+  c.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  c.fillRect(
+    ann.position.x - pad,
+    ann.position.y - ascent - pad,
+    metrics.width + pad * 2,
+    ascent + descent + pad * 2,
+  );
   c.fillStyle = ann.color;
   c.fillText(ann.text, ann.position.x, ann.position.y);
 }
