@@ -4,6 +4,7 @@ mod config;
 mod context_menu;
 mod error;
 mod hotkeys;
+mod imgur;
 mod ocr;
 mod overlay;
 mod recording;
@@ -97,6 +98,7 @@ pub fn run() {
       commands::complete_select_screen_capture,
       commands::complete_ocr_capture,
       commands::ocr_image,
+      commands::upload_last_to_imgur,
     ])
     .setup(|app| {
       let config = config::load_config(&app.handle());

@@ -47,9 +47,14 @@
           <span class="hint">strftime format, e.g. %Y-%m-%d_%H-%M-%S</span>
         </div>
 
-        <div class="field checkbox-field">
-          <input type="checkbox" id="copy-to-clipboard" />
-          <label for="copy-to-clipboard">Copy screenshots to clipboard</label>
+        <div class="field">
+          <label for="clipboard-action">Copy to clipboard</label>
+          <select id="clipboard-action">
+            <option value="image">Image</option>
+            <option value="url">URL (upload to catbox.moe)</option>
+            <option value="none">None</option>
+          </select>
+          <span class="hint">Image copies the screenshot, URL uploads and copies a shareable link</span>
         </div>
 
         <div class="field checkbox-field">
@@ -170,46 +175,19 @@
           <div class="modifier-group">
             <div class="modifier-row">
               <label for="mod-default">Default</label>
-              <select id="mod-default">
-                <option value="freehand">Freehand</option>
-                <option value="arrow">Arrow</option>
-                <option value="oval">Oval</option>
-                <option value="rect">Rectangle</option>
-                <option value="text">Text</option>
-              </select>
+              <select id="mod-default"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-shift">Shift</label>
-              <select id="mod-shift">
-                <option value="arrow">Arrow</option>
-                <option value="oval">Oval</option>
-                <option value="rect">Rectangle</option>
-                <option value="text">Text</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-shift"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-ctrl">Ctrl</label>
-              <select id="mod-ctrl">
-                <option value="oval">Oval</option>
-                <option value="arrow">Arrow</option>
-                <option value="rect">Rectangle</option>
-                <option value="text">Text</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-ctrl"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-alt">Alt</label>
-              <select id="mod-alt">
-                <option value="text">Text</option>
-                <option value="arrow">Arrow</option>
-                <option value="oval">Oval</option>
-                <option value="rect">Rectangle</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-alt"></select>
             </div>
           </div>
 
@@ -217,46 +195,19 @@
           <div class="modifier-group">
             <div class="modifier-row">
               <label for="mod-right-default">Default</label>
-              <select id="mod-right-default">
-                <option value="arrow">Arrow</option>
-                <option value="freehand">Freehand</option>
-                <option value="oval">Oval</option>
-                <option value="rect">Rectangle</option>
-                <option value="text">Text</option>
-              </select>
+              <select id="mod-right-default"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-right-shift">Shift</label>
-              <select id="mod-right-shift">
-                <option value="rect">Rectangle</option>
-                <option value="arrow">Arrow</option>
-                <option value="oval">Oval</option>
-                <option value="text">Text</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-right-shift"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-right-ctrl">Ctrl</label>
-              <select id="mod-right-ctrl">
-                <option value="oval">Oval</option>
-                <option value="arrow">Arrow</option>
-                <option value="rect">Rectangle</option>
-                <option value="text">Text</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-right-ctrl"></select>
             </div>
             <div class="modifier-row">
               <label for="mod-right-alt">Alt</label>
-              <select id="mod-right-alt">
-                <option value="text">Text</option>
-                <option value="arrow">Arrow</option>
-                <option value="oval">Oval</option>
-                <option value="rect">Rectangle</option>
-                <option value="freehand">Freehand</option>
-                <option value="none">None</option>
-              </select>
+              <select id="mod-right-alt"></select>
             </div>
           </div>
         </div>

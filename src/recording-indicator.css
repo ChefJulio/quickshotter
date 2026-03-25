@@ -1,0 +1,109 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 1px solid rgba(255, 60, 60, 0.5);
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #fff;
+  cursor: move;
+  -webkit-app-region: drag;
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  background: #ff3c3c;
+  border-radius: 50%;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.timer {
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+}
+.stop-btn {
+  -webkit-app-region: no-drag;
+  background: #ff3c3c;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.stop-btn:hover {
+  background: #ff5555;
+}
+.saved-state {
+  display: none;
+}
+.indicator.saved {
+  border-color: rgba(100, 255, 100, 0.5);
+}
+.saved-state.visible {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.saved-label {
+  color: #6f6;
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+.folder-btn {
+  -webkit-app-region: no-drag;
+  background: #4a9eff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.folder-btn:hover {
+  background: #6ab4ff;
+}
+.countdown {
+  color: #777;
+  font-size: 11px;
+  min-width: 18px;
+  text-align: center;
+}
+.close-btn {
+  -webkit-app-region: no-drag;
+  background: none;
+  color: #999;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.close-btn:hover {
+  color: #fff;
+}
+.recording-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

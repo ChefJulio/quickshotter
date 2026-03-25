@@ -69,6 +69,21 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         "ocr_region" => {
           crate::commands::delayed_ocr_capture(&app);
         }
+        "upload_imgur" => {
+          let app = app.clone();
+          tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::commands::upload_last_to_imgur(app.clone()).await {
+              eprintln!("Upload failed: {e}");
+              use tauri_plugin_notification::NotificationExt;
+              app.notification()
+                .builder()
+                .title("Upload failed")
+                .body(&e.to_string())
+                .show()
+                .ok();
+            }
+          });
+        }
         "annotate_file" => {
           let app = app.clone();
           tauri::async_runtime::spawn(async move {
@@ -174,6 +189,7 @@ pub fn build_tray_menu(
   }
 
   builder = builder.item(&PredefinedMenuItem::separator(app)?);
+  builder = builder.item(&MenuItemBuilder::with_id("upload_imgur", "Upload Last to catbox.moe").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("annotate_file", "Annotate File...").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("exit", "Exit").build(app)?);

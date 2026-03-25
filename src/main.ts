@@ -16,12 +16,40 @@ let folderInput: HTMLInputElement;
 let formatSelect: HTMLSelectElement;
 let prefixInput: HTMLInputElement;
 let suffixInput: HTMLInputElement;
-let copyToClipboardCheckbox: HTMLInputElement;
+let clipboardActionSelect: HTMLSelectElement;
 let saveToDiskCheckbox: HTMLInputElement;
 let captureModeSelect: HTMLSelectElement;
 let fullscreenModeSelect: HTMLSelectElement;
 let captureDelaySelect: HTMLSelectElement;
 let annotateCapturesCheckbox: HTMLInputElement;
+
+const TOOL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'freehand', label: 'Freehand' },
+  { value: 'arrow',    label: 'Arrow' },
+  { value: 'oval',     label: 'Oval' },
+  { value: 'rect',     label: 'Rectangle' },
+  { value: 'text',     label: 'Text' },
+  { value: 'step',     label: 'Step' },
+  { value: 'blur',     label: 'Blur' },
+  { value: 'grabtext', label: 'Grab Text' },
+];
+
+function populateToolSelect(el: HTMLSelectElement, includeNone = false) {
+  el.innerHTML = '';
+  for (const { value, label } of TOOL_OPTIONS) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    el.appendChild(opt);
+  }
+  if (includeNone) {
+    const opt = document.createElement('option');
+    opt.value = 'none';
+    opt.textContent = 'None';
+    el.appendChild(opt);
+  }
+}
+
 let modDefaultSelect: HTMLSelectElement;
 let modShiftSelect: HTMLSelectElement;
 let modCtrlSelect: HTMLSelectElement;
@@ -182,7 +210,7 @@ function collectConfig(): AppConfig {
     format: formatSelect.value as AppConfig['format'],
     filename_prefix: prefixInput.value,
     filename_suffix: suffixInput.value,
-    copy_to_clipboard: copyToClipboardCheckbox.checked,
+    clipboard_action: clipboardActionSelect.value as AppConfig['clipboard_action'],
     save_to_disk: saveToDiskCheckbox.checked,
     capture_mode: captureModeSelect.value as AppConfig['capture_mode'],
     fullscreen_mode: fullscreenModeSelect.value as AppConfig['fullscreen_mode'],
@@ -218,7 +246,7 @@ function applyConfig(config: AppConfig) {
   formatSelect.value = config.format;
   prefixInput.value = config.filename_prefix;
   suffixInput.value = config.filename_suffix;
-  copyToClipboardCheckbox.checked = config.copy_to_clipboard;
+  clipboardActionSelect.value = config.clipboard_action;
   saveToDiskCheckbox.checked = config.save_to_disk;
   captureModeSelect.value = config.capture_mode;
   fullscreenModeSelect.value = config.fullscreen_mode;
@@ -299,11 +327,12 @@ window.addEventListener('DOMContentLoaded', () => {
   formatSelect = document.getElementById('format') as HTMLSelectElement;
   prefixInput = document.getElementById('filename-prefix') as HTMLInputElement;
   suffixInput = document.getElementById('filename-suffix') as HTMLInputElement;
-  copyToClipboardCheckbox = document.getElementById('copy-to-clipboard') as HTMLInputElement;
+  clipboardActionSelect = document.getElementById('clipboard-action') as HTMLSelectElement;
   saveToDiskCheckbox = document.getElementById('save-to-disk') as HTMLInputElement;
   captureModeSelect = document.getElementById('capture-mode') as HTMLSelectElement;
   fullscreenModeSelect = document.getElementById('fullscreen-mode') as HTMLSelectElement;
   captureDelaySelect = document.getElementById('capture-delay') as HTMLSelectElement;
+
   annotateCapturesCheckbox = document.getElementById('annotate-captures') as HTMLInputElement;
   modDefaultSelect = document.getElementById('mod-default') as HTMLSelectElement;
   modShiftSelect = document.getElementById('mod-shift') as HTMLSelectElement;
@@ -313,6 +342,11 @@ window.addEventListener('DOMContentLoaded', () => {
   modRightShiftSelect = document.getElementById('mod-right-shift') as HTMLSelectElement;
   modRightCtrlSelect = document.getElementById('mod-right-ctrl') as HTMLSelectElement;
   modRightAltSelect = document.getElementById('mod-right-alt') as HTMLSelectElement;
+  populateToolSelect(modDefaultSelect);
+  populateToolSelect(modRightDefaultSelect);
+  for (const sel of [modShiftSelect, modCtrlSelect, modAltSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect]) {
+    populateToolSelect(sel, true);
+  }
   launchOnStartupCheckbox = document.getElementById('launch-on-startup') as HTMLInputElement;
   explorerContextMenuCheckbox = document.getElementById('explorer-context-menu') as HTMLInputElement;
   folderWarning = document.getElementById('folder-warning') as HTMLSpanElement;
@@ -332,7 +366,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Checkboxes and selects: save immediately on change
   const immediateElements = [
-    formatSelect, captureModeSelect, fullscreenModeSelect, captureDelaySelect, copyToClipboardCheckbox, saveToDiskCheckbox,
+    formatSelect, captureModeSelect, fullscreenModeSelect, captureDelaySelect, clipboardActionSelect, saveToDiskCheckbox,
     annotateCapturesCheckbox, launchOnStartupCheckbox, explorerContextMenuCheckbox,
     modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
     modRightDefaultSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect,

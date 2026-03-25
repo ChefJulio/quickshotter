@@ -17,8 +17,8 @@ pub struct AppConfig {
   pub save_to_disk: bool,
   #[serde(default = "default_capture_mode")]
   pub capture_mode: String,
-  #[serde(default = "default_true")]
-  pub copy_to_clipboard: bool,
+  #[serde(default = "default_clipboard_action")]
+  pub clipboard_action: String,
   #[serde(default)]
   pub annotate_captures: bool,
   #[serde(default = "default_shift_tool")]
@@ -68,6 +68,10 @@ fn default_true() -> bool {
   true
 }
 
+fn default_clipboard_action() -> String {
+  "image".to_string()
+}
+
 fn default_annotate_default_tool() -> String {
   "freehand".to_string()
 }
@@ -113,15 +117,15 @@ fn default_gif_max_width() -> u32 {
 }
 
 fn default_shift_tool() -> String {
-  "arrow".to_string()
-}
-
-fn default_ctrl_tool() -> String {
   "oval".to_string()
 }
 
+fn default_ctrl_tool() -> String {
+  "rect".to_string()
+}
+
 fn default_alt_tool() -> String {
-  "text".to_string()
+  "step".to_string()
 }
 
 fn default_right_default_tool() -> String {
@@ -129,15 +133,15 @@ fn default_right_default_tool() -> String {
 }
 
 fn default_right_shift_tool() -> String {
-  "rect".to_string()
+  "blur".to_string()
 }
 
 fn default_right_ctrl_tool() -> String {
-  "oval".to_string()
+  "text".to_string()
 }
 
 fn default_right_alt_tool() -> String {
-  "text".to_string()
+  "grabtext".to_string()
 }
 
 impl Default for AppConfig {
@@ -150,7 +154,7 @@ impl Default for AppConfig {
       format: "png".to_string(),
       filename_prefix: "screenshot".to_string(),
       save_to_disk: true,
-      copy_to_clipboard: true,
+      clipboard_action: default_clipboard_action(),
       capture_mode: "instant".to_string(),
       annotate_captures: false,
       annotate_shift_tool: default_shift_tool(),

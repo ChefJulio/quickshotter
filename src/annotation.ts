@@ -1,3 +1,4 @@
+import './annotation.css';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { AnnotationConfig } from './types';
@@ -50,7 +51,15 @@ interface BlurAnnotation {
   radius: number;
 }
 
-type Annotation = FreehandAnnotation | ArrowAnnotation | OvalAnnotation | RectAnnotation | TextAnnotation | BlurAnnotation;
+interface StepAnnotation {
+  type: 'step';
+  position: Point;
+  number: number;
+  color: string;
+  fontSize: number;
+}
+
+type Annotation = FreehandAnnotation | ArrowAnnotation | OvalAnnotation | RectAnnotation | TextAnnotation | BlurAnnotation | StepAnnotation;
 
 const MIN_DRAG_SIZE = 3;
 const MAX_UNDO = 100;
@@ -62,6 +71,16 @@ let ctx: CanvasRenderingContext2D;
 let sourceImage: HTMLImageElement;
 let imageRect = { x: 0, y: 0, w: 0, h: 0 };
 let scale = 1;
+
+// Zoom/pan state
+let zoomLevel = 1;
+let panX = 0;
+let panY = 0;
+let isPanning = false;
+let panStart: Point | null = null;
+let spaceHeld = false;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 10;
 
 let undoStack: Annotation[] = [];
 let redoStack: Annotation[] = [];
@@ -78,8 +97,8 @@ let arrowStyle = 'standard';
 
 // Modifier-to-tool mapping
 let modifierTools: AnnotationConfig = {
-  shift_tool: 'arrow', ctrl_tool: 'oval', alt_tool: 'text', default_tool: 'freehand',
-  right_default_tool: 'arrow', right_shift_tool: 'rect', right_ctrl_tool: 'oval', right_alt_tool: 'text',
+  shift_tool: 'oval', ctrl_tool: 'rect', alt_tool: 'step', default_tool: 'freehand',
+  right_default_tool: 'arrow', right_shift_tool: 'blur', right_ctrl_tool: 'text', right_alt_tool: 'grabtext',
 };
 
 // Text tool state
@@ -122,15 +141,24 @@ function computeLayout() {
     scale = 1;
     return;
   }
-  scale = Math.min(sw / iw, sh / ih, 1.0);
+  const fitScale = Math.min(sw / iw, sh / ih, 1.0);
+  scale = fitScale * zoomLevel;
   const dw = Math.floor(iw * scale);
   const dh = Math.floor(ih * scale);
   imageRect = {
-    x: Math.floor((sw - dw) / 2),
-    y: Math.floor((sh - dh) / 2),
+    x: Math.floor((sw - dw) / 2) + panX,
+    y: Math.floor((sh - dh) / 2) + panY,
     w: dw,
     h: dh,
   };
+}
+
+function resetView() {
+  zoomLevel = 1;
+  panX = 0;
+  panY = 0;
+  computeLayout();
+  render();
 }
 
 function toImageCoords(screenX: number, screenY: number): Point | null {
@@ -234,6 +262,7 @@ function drawAnnotation(c: CanvasRenderingContext2D, ann: Annotation) {
     case 'oval': drawOval(c, ann); break;
     case 'rect': drawRect(c, ann); break;
     case 'text': drawText(c, ann); break;
+    case 'step': drawStep(c, ann); break;
   }
 }
 
@@ -390,6 +419,23 @@ function drawText(c: CanvasRenderingContext2D, ann: TextAnnotation) {
   c.fillText(ann.text, ann.position.x, ann.position.y);
 }
 
+function drawStep(c: CanvasRenderingContext2D, ann: StepAnnotation) {
+  const radius = ann.fontSize * 0.7;
+  // Filled circle
+  c.beginPath();
+  c.arc(ann.position.x, ann.position.y, radius, 0, Math.PI * 2);
+  c.fillStyle = ann.color;
+  c.fill();
+  // Number text (white on colored circle)
+  c.font = `bold ${ann.fontSize}px sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = '#ffffff';
+  c.fillText(String(ann.number), ann.position.x, ann.position.y);
+  c.textAlign = 'start';
+  c.textBaseline = 'alphabetic';
+}
+
 /** Render a blur annotation. Handles its own coordinate transform since it
  *  needs to clip and re-draw the source image with a CSS filter. */
 function drawBlurAnnotation(
@@ -495,6 +541,10 @@ function annotationBoundingRect(ann: Annotation): { x: number; y: number; w: num
     }
     case 'blur':
       return { ...ann.rect };
+    case 'step': {
+      const r = ann.fontSize * 0.7;
+      return { x: ann.position.x - r, y: ann.position.y - r, w: r * 2, h: r * 2 };
+    }
   }
 }
 
@@ -568,6 +618,15 @@ function hitTestText(imagePos: Point): number | null {
 // -- Mouse handlers --
 
 function onMouseDown(e: MouseEvent) {
+  // Middle-mouse or Space+left-click starts panning
+  if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+    e.preventDefault();
+    isPanning = true;
+    panStart = { x: e.clientX - panX, y: e.clientY - panY };
+    canvas.style.cursor = 'grabbing';
+    return;
+  }
+
   if (e.button !== 0 && e.button !== 2) return;
 
   // Check if click is on toolbar
@@ -590,17 +649,6 @@ function onMouseDown(e: MouseEvent) {
   // Crop mode intercepts all mouse events
   if (isCropping) {
     if (e.button === 0) onCropMouseDown(e);
-    return;
-  }
-
-  // Grab-text mode: start drag selection for OCR
-  if (activeTool === 'grabtext' && e.button === 0) {
-    const pos = toImageCoords(e.clientX, e.clientY);
-    if (!pos) return;
-    isGrabbingText = true;
-    grabTextDragStart = pos;
-    grabTextRect = { x: pos.x, y: pos.y, w: 0, h: 0 };
-    render();
     return;
   }
 
@@ -631,9 +679,28 @@ function onMouseDown(e: MouseEvent) {
 
   const tool = toolFromModifiers(e);
 
+  // Grab-text mode: start drag selection for OCR
+  if (tool === 'grabtext') {
+    isGrabbingText = true;
+    grabTextDragStart = pos;
+    grabTextRect = { x: pos.x, y: pos.y, w: 0, h: 0 };
+    render();
+    return;
+  }
+
   // Text tool: place new (hit test above didn't match an existing annotation)
   if (tool === 'text') {
     placeTextInput(e.clientX, e.clientY, pos);
+    return;
+  }
+
+  // Step tool: click to place next numbered step
+  if (tool === 'step') {
+    const nextNum = undoStack.filter(a => a.type === 'step').length + 1;
+    undoStack.push({ type: 'step', position: pos, number: nextNum, color: activeColor, fontSize: activeFontSize });
+    redoStack.length = 0;
+    updateUndoRedoButtons();
+    render();
     return;
   }
 
@@ -659,6 +726,15 @@ function onMouseDown(e: MouseEvent) {
 }
 
 function onMouseMove(e: MouseEvent) {
+  // Pan handling
+  if (isPanning && panStart) {
+    panX = e.clientX - panStart.x;
+    panY = e.clientY - panStart.y;
+    computeLayout();
+    render();
+    return;
+  }
+
   if (isCropping) { onCropMouseMove(e); return; }
 
   // Grab-text drag: update selection rect
@@ -731,6 +807,13 @@ function onMouseMove(e: MouseEvent) {
 }
 
 function onMouseUp(e: MouseEvent) {
+  if (isPanning) {
+    isPanning = false;
+    panStart = null;
+    canvas.style.cursor = spaceHeld ? 'grab' : 'crosshair';
+    return;
+  }
+
   if (e.button !== 0 && e.button !== 2) return;
   if (isCropping) { onCropMouseUp(); return; }
 
@@ -1213,7 +1296,63 @@ function onKeyDown(e: KeyboardEvent) {
   } else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
     e.preventDefault();
     redo();
+  } else if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    resetView();
+  } else if (e.key === ' ') {
+    e.preventDefault();
+    spaceHeld = true;
+    canvas.style.cursor = 'grab';
   }
+}
+
+function onKeyUp(e: KeyboardEvent) {
+  if (e.key === ' ') {
+    spaceHeld = false;
+    if (!isPanning) {
+      canvas.style.cursor = 'crosshair';
+    }
+  }
+}
+
+function onWheel(e: WheelEvent) {
+  e.preventDefault();
+
+  if (e.ctrlKey) {
+    // Ctrl+scroll = zoom centered on cursor
+    const zoomFactor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomLevel * zoomFactor));
+    if (newZoom === zoomLevel) return;
+
+    const sw = cssWidth();
+    const sh = cssHeight();
+    const iw = sourceImage.naturalWidth;
+    const ih = sourceImage.naturalHeight;
+    const fitScale = Math.min(sw / iw, sh / ih, 1.0);
+
+    const oldScale = fitScale * zoomLevel;
+    const oldCenterX = (sw - iw * oldScale) / 2 + panX;
+    const oldCenterY = (sh - ih * oldScale) / 2 + panY;
+
+    const imgX = (e.clientX - oldCenterX) / oldScale;
+    const imgY = (e.clientY - oldCenterY) / oldScale;
+
+    const newScale = fitScale * newZoom;
+    const newCenterX = (sw - iw * newScale) / 2;
+    const newCenterY = (sh - ih * newScale) / 2;
+
+    panX = e.clientX - imgX * newScale - newCenterX;
+    panY = e.clientY - imgY * newScale - newCenterY;
+    zoomLevel = newZoom;
+  } else {
+    // Regular scroll = pan (vertical scroll pans Y, shift+scroll pans X)
+    const delta = e.shiftKey ? { x: -e.deltaY, y: 0 } : { x: -e.deltaX, y: -e.deltaY };
+    panX += delta.x;
+    panY += delta.y;
+  }
+
+  computeLayout();
+  render();
 }
 
 // -- Toolbar interaction --
@@ -1229,6 +1368,7 @@ function initToolbar() {
     text: document.getElementById('tool-text')!,
     crop: document.getElementById('tool-crop')!,
     blur: document.getElementById('tool-blur')!,
+    step: document.getElementById('tool-step')!,
     grabtext: document.getElementById('tool-grabtext')!,
   };
 
@@ -1348,7 +1488,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
   });
+  canvas.addEventListener('wheel', onWheel, { passive: false });
   document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
 
   // Re-layout on window resize
   window.addEventListener('resize', () => {

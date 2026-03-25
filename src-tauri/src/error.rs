@@ -19,6 +19,8 @@ pub enum AppError {
   Recording(String),
   #[error("OCR error: {0}")]
   Ocr(String),
+  #[error("Upload error: {0}")]
+  Upload(String),
   #[error("Tauri error: {0}")]
   Tauri(#[from] tauri::Error),
 }

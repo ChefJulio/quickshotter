@@ -79,7 +79,9 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     config.save_to_disk = !config.save_to_disk;
   }
 
-  let copied = if config.copy_to_clipboard {
+  // Clipboard: "image" copies the screenshot, "url" uploads and copies URL, "none" skips
+  let clipboard_action = config.clipboard_action.as_str();
+  let copied = if clipboard_action == "image" {
     capture::copy_to_clipboard(img)?;
     true
   } else {
@@ -94,6 +96,44 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
+  }
+
+  // Upload if clipboard_action is "url"
+  if clipboard_action == "url" {
+    let img2 = img.clone();
+    let app2 = app.clone();
+    let copy_url = clipboard_action == "url";
+    tauri::async_runtime::spawn(async move {
+      match crate::imgur::upload(&img2).await {
+        Ok(url) => {
+          if copy_url {
+            capture::copy_text_to_clipboard(&url).ok();
+          }
+          use tauri_plugin_notification::NotificationExt;
+          app2.notification()
+            .builder()
+            .title("Uploaded to catbox.moe")
+            .body(&url)
+            .show()
+            .ok();
+          // Open in default browser
+          #[cfg(target_os = "windows")]
+          { std::process::Command::new("cmd").args(["/c", "start", &url]).spawn().ok(); }
+          #[cfg(target_os = "macos")]
+          { std::process::Command::new("open").arg(&url).spawn().ok(); }
+        }
+        Err(e) => {
+          eprintln!("Upload failed: {e}");
+          use tauri_plugin_notification::NotificationExt;
+          app2.notification()
+            .builder()
+            .title("Upload failed")
+            .body(&e.to_string())
+            .show()
+            .ok();
+        }
+      }
+    });
   }
 
   tray::refresh_tray_menu(app);
@@ -225,7 +265,19 @@ pub fn cancel_delayed_capture(app: AppHandle) {
 /// Execute a delayed capture using previously saved params. Called by the countdown window.
 #[tauri::command]
 pub async fn execute_delayed_capture(app: AppHandle) -> Result<(), AppError> {
-  // Close countdown and border windows
+  // Hide countdown and border windows, wait for de-render, then destroy.
+  // hide() is instant and skips the Windows close animation.
+  if let Some(w) = app.get_webview_window("countdown") {
+    w.hide().ok();
+  }
+  if let Some(w) = app.get_webview_window("delay-border") {
+    w.hide().ok();
+  }
+  // Wait for windows to fully disappear from screen
+  let _ = tauri::async_runtime::spawn_blocking(|| {
+    std::thread::sleep(std::time::Duration::from_millis(250));
+  }).await;
+  // Now destroy (after screenshot area is clear)
   if let Some(w) = app.get_webview_window("countdown") {
     w.destroy().ok();
   }
@@ -982,7 +1034,7 @@ fn save_annotated_beside(
 
   // Also copy to clipboard if configured
   let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-  let copied = if config.copy_to_clipboard {
+  let copied = if config.clipboard_action == "image" {
     capture::copy_to_clipboard(img).unwrap_or(());
     true
   } else {
@@ -1247,6 +1299,42 @@ fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
     builder = builder.extra("filepath", fp);
   }
   builder.show().ok();
+}
+
+// -- Imgur upload --
+
+/// Upload the most recent capture (from history) to catbox.moe.
+#[tauri::command]
+pub async fn upload_last_to_imgur(app: AppHandle) -> Result<String, AppError> {
+  let path = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    state.capture_history.back().cloned()
+      .ok_or_else(|| AppError::Upload("No recent capture to upload".to_string()))?
+  };
+
+  let img = image::open(&path)
+    .map_err(|e| AppError::Upload(format!("Failed to read image: {e}")))?
+    .to_rgba8();
+
+  let url = crate::imgur::upload(&img).await?;
+  capture::copy_text_to_clipboard(&url)?;
+
+  use tauri_plugin_notification::NotificationExt;
+  app.notification()
+    .builder()
+    .title("Uploaded to catbox.moe")
+    .body(&url)
+    .show()
+    .ok();
+
+  // Open in default browser
+  #[cfg(target_os = "windows")]
+  { std::process::Command::new("cmd").args(["/c", "start", &url]).spawn().ok(); }
+  #[cfg(target_os = "macos")]
+  { std::process::Command::new("open").arg(&url).spawn().ok(); }
+
+  Ok(url)
 }
 
 // -- Recording helpers --
@@ -1519,7 +1607,7 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
       .unwrap_or(0.0);
     let format = state.config.recording_format.clone();
     let pipeline = state.pipeline_handle.take();
-    let copy_clip = state.config.copy_to_clipboard;
+    let copy_clip = state.config.clipboard_action == "image";
 
     state.is_recording = false;
     state.recording_stop_signal = None;
