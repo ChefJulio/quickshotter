@@ -46,6 +46,9 @@ pub struct AppConfig {
   pub explorer_context_menu: bool,
   #[serde(default = "default_fullscreen_mode")]
   pub fullscreen_mode: String,
+  // OCR
+  #[serde(default = "default_hotkey_ocr")]
+  pub hotkey_ocr: String,
   // Recording settings
   #[serde(default = "default_hotkey_record")]
   pub hotkey_record: String,
@@ -81,6 +84,10 @@ fn default_fullscreen_mode() -> String {
 
 fn default_hotkey_window() -> String {
   "CmdOrCtrl+Alt+Shift+W".to_string()
+}
+
+fn default_hotkey_ocr() -> String {
+  "CmdOrCtrl+Alt+Shift+T".to_string()
 }
 
 fn default_hotkey_record() -> String {
@@ -156,6 +163,7 @@ impl Default for AppConfig {
       launch_on_startup: false,
       explorer_context_menu: false,
       fullscreen_mode: default_fullscreen_mode(),
+      hotkey_ocr: default_hotkey_ocr(),
       hotkey_record: default_hotkey_record(),
       recording_format: default_recording_format(),
       recording_fps: default_recording_fps(),

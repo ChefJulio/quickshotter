@@ -332,6 +332,15 @@ pub fn is_likely_blank(img: &RgbaImage) -> bool {
     .all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0)
 }
 
+/// Copy plain text to the system clipboard.
+pub fn copy_text_to_clipboard(text: &str) -> Result<(), AppError> {
+  let mut clipboard = Clipboard::new().map_err(|e| AppError::Clipboard(e.to_string()))?;
+  clipboard
+    .set_text(text)
+    .map_err(|e| AppError::Clipboard(e.to_string()))?;
+  Ok(())
+}
+
 /// Copy an RGBA image to the system clipboard.
 pub fn copy_to_clipboard(img: &RgbaImage) -> Result<(), AppError> {
   let mut clipboard = Clipboard::new().map_err(|e| AppError::Clipboard(e.to_string()))?;

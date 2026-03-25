@@ -163,6 +163,7 @@ async function validateFolder() {
 let regionHotkey: HotkeyState;
 let fullscreenHotkey: HotkeyState;
 let windowHotkey: HotkeyState;
+let ocrHotkey: HotkeyState;
 let recordHotkey: HotkeyState;
 let recordingFormatSelect: HTMLSelectElement;
 let recordingFpsSelect: HTMLSelectElement;
@@ -195,6 +196,7 @@ function collectConfig(): AppConfig {
     annotate_right_alt_tool: modRightAltSelect.value,
     launch_on_startup: launchOnStartupCheckbox.checked,
     explorer_context_menu: explorerContextMenuCheckbox.checked,
+    hotkey_ocr: ocrHotkey.rawValue,
     hotkey_record: recordHotkey.rawValue,
     recording_format: recordingFormatSelect.value as AppConfig['recording_format'],
     recording_fps: parseInt(recordingFpsSelect.value, 10),
@@ -229,6 +231,8 @@ function applyConfig(config: AppConfig) {
   modRightAltSelect.value = config.annotate_right_alt_tool;
   launchOnStartupCheckbox.checked = config.launch_on_startup;
   explorerContextMenuCheckbox.checked = config.explorer_context_menu;
+  ocrHotkey.rawValue = config.hotkey_ocr;
+  ocrHotkey.input.value = formatHotkeyDisplay(config.hotkey_ocr);
   recordHotkey.rawValue = config.hotkey_record;
   recordHotkey.input.value = formatHotkeyDisplay(config.hotkey_record);
   recordingFormatSelect.value = config.recording_format;
@@ -296,6 +300,7 @@ window.addEventListener('DOMContentLoaded', () => {
   launchOnStartupCheckbox = document.getElementById('launch-on-startup') as HTMLInputElement;
   explorerContextMenuCheckbox = document.getElementById('explorer-context-menu') as HTMLInputElement;
   folderWarning = document.getElementById('folder-warning') as HTMLSpanElement;
+  const ocrHotkeyInput = document.getElementById('hotkey-ocr') as HTMLInputElement;
   const recordHotkeyInput = document.getElementById('hotkey-record') as HTMLInputElement;
   recordingFormatSelect = document.getElementById('recording-format') as HTMLSelectElement;
   recordingFpsSelect = document.getElementById('recording-fps') as HTMLSelectElement;
@@ -306,6 +311,7 @@ window.addEventListener('DOMContentLoaded', () => {
   regionHotkey = initHotkeyRecorder(regionHotkeyInput, '', autoSave);
   fullscreenHotkey = initHotkeyRecorder(fullscreenHotkeyInput, '', autoSave);
   windowHotkey = initHotkeyRecorder(windowHotkeyInput, '', autoSave);
+  ocrHotkey = initHotkeyRecorder(ocrHotkeyInput, '', autoSave);
   recordHotkey = initHotkeyRecorder(recordHotkeyInput, '', autoSave);
 
   // Checkboxes and selects: save immediately on change

@@ -70,6 +70,16 @@ function showInstantOverlay() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
+function showOcrOverlay() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = 'bold 16px Consolas, monospace';
+  ctx.fillStyle = 'rgba(0, 200, 120, 0.9)';
+  ctx.textAlign = 'center';
+  ctx.fillText('Select text to recognize', canvas.width / 2, 40);
+  ctx.textAlign = 'start';
+}
+
 function showRecordRegionOverlay() {
   ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -373,6 +383,11 @@ async function onMouseUp(e: MouseEvent) {
       cancel();
     }
     return;
+  } else if (mode === 'ocr') {
+    invoke('complete_ocr_capture', { x1, y1, x2, y2 }).catch((e) => {
+      console.error('OCR capture failed:', e);
+      cancel();
+    });
   } else {
     invoke('complete_region_capture', { x1, y1, x2, y2, forceAnnotate: e.shiftKey, toggleSave: e.altKey }).catch((e) => {
       console.error('Region capture failed:', e);
@@ -499,7 +514,7 @@ function onKeyDown(e: KeyboardEvent) {
     }
     cancelled = false; // Reset so cancel() runs even if previously called
     cancel();
-  } else if (mode !== 'window' && mode !== 'record_region' && (e.key === 'Enter' || e.key === ' ')) {
+  } else if (mode !== 'window' && mode !== 'record_region' && mode !== 'ocr' && (e.key === 'Enter' || e.key === ' ')) {
     e.preventDefault();
     captureFullscreen();
   }
@@ -544,6 +559,8 @@ window.addEventListener('DOMContentLoaded', async () => {
       loadScreenshot(base64Data);
     } else if (mode === 'record_region') {
       showRecordRegionOverlay();
+    } else if (mode === 'ocr') {
+      showOcrOverlay();
     } else {
       showInstantOverlay();
     }
@@ -561,6 +578,8 @@ window.addEventListener('DOMContentLoaded', async () => {
         showWindowOverlay();
       } else if (mode === 'record_region') {
         showRecordRegionOverlay();
+      } else if (mode === 'ocr') {
+        showOcrOverlay();
       } else if (mode !== 'freeze') {
         showInstantOverlay();
       }

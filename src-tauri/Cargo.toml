@@ -45,6 +45,11 @@ windows = { version = "0.62", features = [
   "Win32_System_DataExchange",
   "Win32_System_Memory",
   "Win32_UI_WindowsAndMessaging",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Globalization",
+  "Foundation",
+  "Storage_Streams",
 ] }
 
 # Optimize dependencies even in debug builds -- critical for image processing

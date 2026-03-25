@@ -4,6 +4,7 @@ mod config;
 mod context_menu;
 mod error;
 mod hotkeys;
+mod ocr;
 mod overlay;
 mod recording;
 mod startup;
@@ -90,6 +91,8 @@ pub fn run() {
       commands::annotate_file,
       commands::get_monitor_list,
       commands::complete_select_screen_capture,
+      commands::complete_ocr_capture,
+      commands::ocr_image,
     ])
     .setup(|app| {
       let config = config::load_config(&app.handle());

@@ -94,6 +94,11 @@ let textDragOriginalPos: Point | null = null; // for undo
 // Toolbar dragging
 let toolbarDragPos: { x: number; y: number } | null = null;
 
+// Grab-text (OCR) state
+let isGrabbingText = false;
+let grabTextRect: { x: number; y: number; w: number; h: number } | null = null;
+let grabTextDragStart: Point | null = null;
+
 // Crop state
 let isCropping = false;
 let cropRect: { x: number; y: number; w: number; h: number } | null = null;
@@ -195,6 +200,25 @@ function render() {
       ctx.stroke();
       ctx.restore();
     }
+  }
+
+  // Grab-text selection overlay
+  if (isGrabbingText && grabTextRect && grabTextRect.w > 0 && grabTextRect.h > 0) {
+    const r = grabTextRect;
+    const sx = imageRect.x + r.x * scale;
+    const sy = imageRect.y + r.y * scale;
+    const sw = r.w * scale;
+    const sh = r.h * scale;
+    ctx.strokeStyle = '#00cc66';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(sx, sy, sw, sh);
+    ctx.setLineDash([]);
+    // Label
+    ctx.font = 'bold 11px Consolas, monospace';
+    ctx.fillStyle = 'rgba(0, 204, 102, 0.9)';
+    const labelY = sy > 18 ? sy - 5 : sy + sh + 14;
+    ctx.fillText('OCR', sx + 2, labelY);
   }
 
   // Crop overlay (drawn last, on top of everything)
@@ -569,6 +593,17 @@ function onMouseDown(e: MouseEvent) {
     return;
   }
 
+  // Grab-text mode: start drag selection for OCR
+  if (activeTool === 'grabtext' && e.button === 0) {
+    const pos = toImageCoords(e.clientX, e.clientY);
+    if (!pos) return;
+    isGrabbingText = true;
+    grabTextDragStart = pos;
+    grabTextRect = { x: pos.x, y: pos.y, w: 0, h: 0 };
+    render();
+    return;
+  }
+
   // Check if click is on a delete button
   if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length) {
     const bp = deleteButtonPos(undoStack[hoveredAnnotationIdx]);
@@ -625,6 +660,19 @@ function onMouseDown(e: MouseEvent) {
 
 function onMouseMove(e: MouseEvent) {
   if (isCropping) { onCropMouseMove(e); return; }
+
+  // Grab-text drag: update selection rect
+  if (isGrabbingText && grabTextDragStart) {
+    const pos = clampToImage(e.clientX, e.clientY);
+    grabTextRect = {
+      x: Math.min(grabTextDragStart.x, pos.x),
+      y: Math.min(grabTextDragStart.y, pos.y),
+      w: Math.abs(pos.x - grabTextDragStart.x),
+      h: Math.abs(pos.y - grabTextDragStart.y),
+    };
+    render();
+    return;
+  }
 
   // Text dragging
   if (draggingTextIdx !== null) {
@@ -685,6 +733,18 @@ function onMouseMove(e: MouseEvent) {
 function onMouseUp(e: MouseEvent) {
   if (e.button !== 0 && e.button !== 2) return;
   if (isCropping) { onCropMouseUp(); return; }
+
+  // Grab-text: extract region and run OCR
+  if (isGrabbingText) {
+    isGrabbingText = false;
+    grabTextDragStart = null;
+    if (grabTextRect && grabTextRect.w >= MIN_DRAG_SIZE && grabTextRect.h >= MIN_DRAG_SIZE) {
+      performGrabTextOcr(grabTextRect);
+    }
+    grabTextRect = null;
+    render();
+    return;
+  }
 
   // Finish text drag. Position was mutated in-place during onMouseMove.
   // The flat undo stack model doesn't support undoing in-place edits, so
@@ -810,6 +870,33 @@ function redo() {
 function updateUndoRedoButtons() {
   (document.getElementById('btn-undo') as HTMLButtonElement).disabled = undoStack.length === 0;
   (document.getElementById('btn-redo') as HTMLButtonElement).disabled = redoStack.length === 0;
+}
+
+// -- Grab-text (OCR) tool --
+
+async function performGrabTextOcr(rect: { x: number; y: number; w: number; h: number }) {
+  // Extract region from source image at full resolution
+  const cx = Math.max(0, Math.round(rect.x));
+  const cy = Math.max(0, Math.round(rect.y));
+  const cw = Math.min(Math.round(rect.w), sourceImage.naturalWidth - cx);
+  const ch = Math.min(Math.round(rect.h), sourceImage.naturalHeight - cy);
+  if (cw < 1 || ch < 1) return;
+
+  const offscreen = document.createElement('canvas');
+  offscreen.width = cw;
+  offscreen.height = ch;
+  const offCtx = offscreen.getContext('2d')!;
+  offCtx.drawImage(sourceImage, cx, cy, cw, ch, 0, 0, cw, ch);
+
+  // Convert to base64 PNG (strip the data URL prefix)
+  const dataUrl = offscreen.toDataURL('image/png');
+  const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+
+  try {
+    await invoke<string>('ocr_image', { imageBase64: base64 });
+  } catch (err) {
+    console.error('Grab text OCR failed:', err);
+  }
 }
 
 // -- Crop tool --
@@ -1142,6 +1229,7 @@ function initToolbar() {
     text: document.getElementById('tool-text')!,
     crop: document.getElementById('tool-crop')!,
     blur: document.getElementById('tool-blur')!,
+    grabtext: document.getElementById('tool-grabtext')!,
   };
 
   for (const [tool, btn] of Object.entries(toolBtns)) {

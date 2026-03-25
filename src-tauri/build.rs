@@ -17,5 +17,13 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=CoreMedia");
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=Foundation");
+
+        // Compile OCR wrapper (Vision framework)
+        cc::Build::new()
+            .file("src/ocr_mac.m")
+            .flag("-fobjc-arc")
+            .compile("ocr_mac");
+
+        println!("cargo:rustc-link-lib=framework=Vision");
     }
 }

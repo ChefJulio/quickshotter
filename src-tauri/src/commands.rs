@@ -262,6 +262,156 @@ async fn complete_region_capture_inner(
   finalize_capture_with_toggle(app, &image, toggle_save)
 }
 
+// -- OCR capture command --
+
+#[tauri::command]
+pub async fn complete_ocr_capture(
+  app: AppHandle,
+  x1: u32,
+  y1: u32,
+  x2: u32,
+  y2: u32,
+) -> Result<String, AppError> {
+  // Hide overlay immediately
+  if let Some(overlay) = app.get_webview_window("overlay") {
+    overlay.hide().ok();
+  }
+
+  let result = complete_ocr_capture_inner(&app, x1, y1, x2, y2).await;
+
+  let app2 = app.clone();
+  tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
+
+  result
+}
+
+async fn complete_ocr_capture_inner(
+  app: &AppHandle,
+  x1: u32,
+  y1: u32,
+  x2: u32,
+  y2: u32,
+) -> Result<String, AppError> {
+  let left = x1.min(x2);
+  let top = y1.min(y2);
+  let right = x1.max(x2);
+  let bottom = y1.max(y2);
+  let w = right - left;
+  let h = bottom - top;
+
+  if w < 3 || h < 3 {
+    return Err(AppError::Ocr("Selection too small".to_string()));
+  }
+
+  // Get the cropped image (same logic as region capture)
+  let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
+
+  let image = if has_pending {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    let screenshot = state
+      .pending_screenshot
+      .as_ref()
+      .ok_or_else(|| AppError::Ocr("No pending screenshot".to_string()))?;
+    safe_crop(screenshot, left, top, w, h)?
+  } else {
+    let _ = tauri::async_runtime::spawn_blocking(|| {
+      std::thread::sleep(std::time::Duration::from_millis(150));
+    }).await;
+    let screen = capture::capture_all_monitors()?;
+    safe_crop(&screen.image, left, top, w, h)?
+  };
+
+  // Run OCR on a blocking thread (WinRT async / Vision sync both block)
+  let text = tauri::async_runtime::spawn_blocking(move || {
+    crate::ocr::recognize_text(&image)
+  }).await.map_err(|e| AppError::Ocr(format!("OCR task panicked: {e}")))?
+    ?;
+
+  if text.is_empty() {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+      .builder()
+      .title("OCR")
+      .body("No text recognized")
+      .show()
+      .ok();
+    return Ok(String::new());
+  }
+
+  // Copy recognized text to clipboard
+  capture::copy_text_to_clipboard(&text)?;
+
+  // Notify with a preview of the recognized text
+  use tauri_plugin_notification::NotificationExt;
+  let preview: String = text.chars().take(80).collect();
+  let body = if text.len() > 80 {
+    format!("{}...", preview)
+  } else {
+    preview
+  };
+  app.notification()
+    .builder()
+    .title("Text copied to clipboard")
+    .body(&body)
+    .show()
+    .ok();
+
+  Ok(text)
+}
+
+// -- OCR from image data (used by annotation editor grab-text tool) --
+
+#[tauri::command]
+pub async fn ocr_image(
+  app: AppHandle,
+  image_base64: String,
+) -> Result<String, AppError> {
+  let png_bytes = base64::Engine::decode(
+    &base64::engine::general_purpose::STANDARD,
+    &image_base64,
+  )
+  .map_err(|e| AppError::Ocr(format!("Failed to decode base64: {e}")))?;
+
+  let img = image::load_from_memory(&png_bytes)
+    .map_err(|e| AppError::Ocr(format!("Failed to decode image: {e}")))?
+    .to_rgba8();
+
+  let text = tauri::async_runtime::spawn_blocking(move || {
+    crate::ocr::recognize_text(&img)
+  }).await.map_err(|e| AppError::Ocr(format!("OCR task panicked: {e}")))?
+    ?;
+
+  if text.is_empty() {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+      .builder()
+      .title("OCR")
+      .body("No text recognized")
+      .show()
+      .ok();
+    return Ok(String::new());
+  }
+
+  capture::copy_text_to_clipboard(&text)?;
+
+  use tauri_plugin_notification::NotificationExt;
+  let preview: String = text.chars().take(80).collect();
+  let body = if text.len() > 80 {
+    format!("{}...", preview)
+  } else {
+    preview
+  };
+  app.notification()
+    .builder()
+    .title("Text copied to clipboard")
+    .body(&body)
+    .show()
+    .ok();
+
+  Ok(text)
+}
+
 // -- Window capture commands --
 
 #[tauri::command]
@@ -680,6 +830,7 @@ pub async fn save_config(
   let hotkeys_changed = old_config.hotkey_region != new_config.hotkey_region
     || old_config.hotkey_fullscreen != new_config.hotkey_fullscreen
     || old_config.hotkey_window != new_config.hotkey_window
+    || old_config.hotkey_ocr != new_config.hotkey_ocr
     || old_config.hotkey_record != new_config.hotkey_record;
 
   // Only reload hotkeys when they actually changed -- avoids briefly

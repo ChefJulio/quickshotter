@@ -83,6 +83,11 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
           });
         }
+        "ocr_region" => {
+          if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "ocr") {
+            eprintln!("OCR overlay failed: {e}");
+          }
+        }
         "annotate_file" => {
           let app = app.clone();
           tauri::async_runtime::spawn(async move {
@@ -143,6 +148,12 @@ pub fn build_tray_menu(
   );
   builder = builder.item(
     &MenuItemBuilder::with_id("capture_fullscreen", &fullscreen_label)
+      .build(app)?,
+  );
+
+  let ocr_label = format!("OCR Region  ({})", format_hotkey_display(&config.hotkey_ocr));
+  builder = builder.item(
+    &MenuItemBuilder::with_id("ocr_region", &ocr_label)
       .build(app)?,
   );
 

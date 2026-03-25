@@ -30,6 +30,9 @@ fn register_hotkeys_from_config(
   let window_shortcut: Shortcut = config.hotkey_window.parse().map_err(|e| {
     format!("Invalid window hotkey '{}': {}", config.hotkey_window, e)
   })?;
+  let ocr_shortcut: Shortcut = config.hotkey_ocr.parse().map_err(|e| {
+    format!("Invalid OCR hotkey '{}': {}", config.hotkey_ocr, e)
+  })?;
   let record_shortcut: Shortcut = config.hotkey_record.parse().map_err(|e| {
     format!("Invalid record hotkey '{}': {}", config.hotkey_record, e)
   })?;
@@ -68,6 +71,15 @@ fn register_hotkeys_from_config(
     move |_app_handle, _shortcut, _event| {
       if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "window") {
         eprintln!("Window capture failed: {e}");
+      }
+    }
+  })?;
+
+  app.global_shortcut().on_shortcut(ocr_shortcut, {
+    let app = app.clone();
+    move |_app_handle, _shortcut, _event| {
+      if let Err(e) = crate::overlay::open_overlay_with_mode(&app, "ocr") {
+        eprintln!("OCR overlay failed: {e}");
       }
     }
   })?;
