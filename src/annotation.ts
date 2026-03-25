@@ -1350,6 +1350,21 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
   document.addEventListener('keydown', onKeyDown);
 
+  // Re-layout on window resize
+  window.addEventListener('resize', () => {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    canvas.style.width = `${window.innerWidth}px`;
+    canvas.style.height = `${window.innerHeight}px`;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+    if (sourceImage) {
+      computeLayout();
+      render();
+    }
+  });
+
   try {
     // Load modifier-to-tool config (includes default_tool)
     modifierTools = await invoke<AnnotationConfig>('get_annotation_config');

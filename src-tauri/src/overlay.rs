@@ -170,32 +170,34 @@ pub fn close_overlay(app: &AppHandle) {
 }
 
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
-  // Use explicit position + size instead of .fullscreen(true) to avoid
-  // macOS native fullscreen animation (slides into a new Space).
-  // Position on the primary monitor (not the full virtual desktop, which
-  // would span multiple monitors and split the editor across them).
+  // Size the window to 80% of the primary monitor, centered.
   let (x, y, w, h) = if let Ok(Some(monitor)) = app.primary_monitor() {
     let pos = monitor.position();
     let size = monitor.size();
-    // monitor.size() returns PhysicalSize (e.g. 2880x1800 on Retina).
-    // inner_size() expects logical pixels, so divide by scale factor.
     let sf = monitor.scale_factor();
-    (pos.x as f64, pos.y as f64, size.width as f64 / sf, size.height as f64 / sf)
+    let mon_w = size.width as f64 / sf;
+    let mon_h = size.height as f64 / sf;
+    let win_w = (mon_w * 0.8).round();
+    let win_h = (mon_h * 0.8).round();
+    let win_x = pos.x as f64 + (mon_w - win_w) / 2.0;
+    let win_y = pos.y as f64 + (mon_h - win_h) / 2.0;
+    (win_x, win_y, win_w, win_h)
   } else {
-    // Fallback: full desktop bounds
     let bounds = capture::get_desktop_bounds()?;
-    (bounds.x as f64, bounds.y as f64, bounds.width as f64, bounds.height as f64)
+    let w = (bounds.width as f64 * 0.8).round();
+    let h = (bounds.height as f64 * 0.8).round();
+    let x = bounds.x as f64 + (bounds.width as f64 - w) / 2.0;
+    let y = bounds.y as f64 + (bounds.height as f64 - h) / 2.0;
+    (x, y, w, h)
   };
   WebviewWindowBuilder::new(app, "annotation", WebviewUrl::App("annotation.html".into()))
     .title("QuickShotter - Annotate")
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    .resizable(false)
+    .decorations(true)
+    .resizable(true)
     .position(x, y)
     .inner_size(w, h)
+    .min_inner_size(400.0, 300.0)
     .visible(false)
-    .skip_taskbar(true)
     .build()?;
   Ok(())
 }
