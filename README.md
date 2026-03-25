@@ -1,8 +1,8 @@
 # QuickShotter
 
-A lightweight, cross-platform screenshot and screen recording tool built with Tauri 2, Rust, and TypeScript. Lives in your system tray with no persistent window — all UI is transient and on-demand.
+A lightweight screenshot and screen recording tool for Windows and macOS, built with Tauri 2, Rust, and TypeScript. Lives in your system tray with no persistent window — all UI is transient and on-demand.
 
-**Platforms:** Windows, macOS (Intel + Apple Silicon), Linux
+**Platforms:** Windows, macOS (Intel + Apple Silicon)
 
 ---
 
@@ -22,13 +22,13 @@ A lightweight, cross-platform screenshot and screen recording tool built with Ta
 
 | Format | Description |
 |--------|-------------|
-| **MP4** (H.264) | Hardware-accelerated via Media Foundation (Windows), VideoToolbox (macOS), or software fallback via openh264 |
+| **MP4** (H.264) | Hardware-accelerated via Media Foundation (Windows) or VideoToolbox (macOS), with openh264 software fallback |
 | **GIF** | Configurable max duration and max width, with automatic downscaling and color quantization |
 
 - **Record hotkey** for quick start/stop toggle
 - **Region recording** — select a screen area to record
 - Configurable frame rate (10/15/24/30 FPS)
-- GPU encoder auto-selection: NVENC, AMF, QuickSync, or D3D11 on Windows; VideoToolbox on macOS; CPU fallback on all platforms
+- GPU encoder auto-selection: NVENC, AMF, QuickSync, or D3D11 on Windows; VideoToolbox on macOS; CPU fallback if needed
 
 ### Overlay Modes
 
@@ -108,7 +108,7 @@ quickshotter/
     ├── overlay.rs             Overlay window lifecycle
     ├── hotkeys.rs             Global shortcut registration
     ├── tray.rs                System tray menu
-    ├── startup.rs             Launch-on-startup (cross-platform)
+    ├── startup.rs             Launch-on-startup (Windows/macOS)
     ├── window_capture.rs      Window detection worker thread
     ├── config.rs              Config struct and JSON persistence
     ├── state.rs               AppState with mutex poison recovery
@@ -197,17 +197,6 @@ quickshotter/
 
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://www.rust-lang.org/tools/install) (stable)
-- Platform-specific dependencies (see below)
-
-### Linux Dependencies
-
-```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-  patchelf libxdo-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev \
-  libxcb-xfixes0-dev libxcb-shm0-dev libxcb-randr0-dev \
-  libxcb-composite0-dev libpipewire-0.3-dev libgbm-dev libdrm-dev \
-  libegl1-mesa-dev
-```
 
 ### Build and Run
 
@@ -228,7 +217,6 @@ GitHub Actions automatically builds on tag push (`v*`) for:
 | Windows x64 | NSIS installer (`.exe`) |
 | macOS ARM | DMG (Apple Silicon) |
 | macOS Intel | DMG (x86_64) |
-| Linux | DEB + AppImage |
 
 Releases are auto-published with a download table. Each release includes signed update bundles and a `latest.json` manifest for the in-app auto-updater.
 
@@ -242,7 +230,6 @@ Config is stored in the platform-specific app data directory:
 |----------|------|
 | Windows | `%APPDATA%\QuickShotter\config\config.json` |
 | macOS | `~/Library/Application Support/com.quickshotter.app/config/config.json` |
-| Linux | `~/.config/quickshotter/config/config.json` |
 
 All configuration changes are validated atomically before being persisted.
 

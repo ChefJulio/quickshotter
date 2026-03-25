@@ -28,7 +28,7 @@
   "bundle": {
     "createUpdaterArtifacts": "v1Compatible",
     "active": true,
-    "targets": ["nsis", "dmg", "app", "deb", "appimage"],
+    "targets": ["nsis", "dmg", "app"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer.nsi"

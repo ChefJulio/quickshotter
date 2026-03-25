@@ -113,8 +113,4 @@ pub fn create_encoder() -> Box<dyn VideoEncoder> {
         ))
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Box::new(super::encoder_cpu::CpuEncoder::new())
-    }
 }

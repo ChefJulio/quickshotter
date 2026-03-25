@@ -225,14 +225,4 @@ pub fn open_in_explorer(path: &PathBuf) {
       .map_err(|e| eprintln!("Failed to open Finder: {e}"))
       .ok();
   }
-  #[cfg(target_os = "linux")]
-  {
-    if let Some(parent) = path.parent() {
-      std::process::Command::new("xdg-open")
-        .arg(parent)
-        .spawn()
-        .map_err(|e| eprintln!("Failed to open file manager: {e}"))
-        .ok();
-    }
-  }
 }

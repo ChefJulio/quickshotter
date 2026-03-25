@@ -44,7 +44,13 @@ interface TextAnnotation {
   fontSize: number;
 }
 
-type Annotation = FreehandAnnotation | ArrowAnnotation | OvalAnnotation | RectAnnotation | TextAnnotation;
+interface BlurAnnotation {
+  type: 'blur';
+  rect: { x: number; y: number; w: number; h: number };
+  radius: number;
+}
+
+type Annotation = FreehandAnnotation | ArrowAnnotation | OvalAnnotation | RectAnnotation | TextAnnotation | BlurAnnotation;
 
 const MIN_DRAG_SIZE = 3;
 const MAX_UNDO = 100;
@@ -151,19 +157,19 @@ function render() {
   // Draw image at display size
   ctx.drawImage(sourceImage, imageRect.x, imageRect.y, imageRect.w, imageRect.h);
 
-  // Transform for annotations (image-space)
-  ctx.save();
-  ctx.translate(imageRect.x, imageRect.y);
-  ctx.scale(scale, scale);
-
-  for (const ann of undoStack) {
-    drawAnnotation(ctx, ann);
+  // Draw annotations (image-space transform)
+  const allAnns = isDrawing && currentAnnotation ? [...undoStack, currentAnnotation] : undoStack;
+  for (const ann of allAnns) {
+    if (ann.type === 'blur') {
+      drawBlurAnnotation(ctx, ann, sourceImage);
+    } else {
+      ctx.save();
+      ctx.translate(imageRect.x, imageRect.y);
+      ctx.scale(scale, scale);
+      drawAnnotation(ctx, ann);
+      ctx.restore();
+    }
   }
-  if (isDrawing && currentAnnotation) {
-    drawAnnotation(ctx, currentAnnotation);
-  }
-
-  ctx.restore();
 
   // Draw delete button for hovered annotation (in screen-space, after restore)
   if (hoveredAnnotationIdx !== null && hoveredAnnotationIdx < undoStack.length && !isDrawing) {
@@ -360,6 +366,56 @@ function drawText(c: CanvasRenderingContext2D, ann: TextAnnotation) {
   c.fillText(ann.text, ann.position.x, ann.position.y);
 }
 
+/** Render a blur annotation. Handles its own coordinate transform since it
+ *  needs to clip and re-draw the source image with a CSS filter. */
+function drawBlurAnnotation(
+  c: CanvasRenderingContext2D,
+  ann: BlurAnnotation,
+  img: HTMLImageElement,
+) {
+  const r = ann.rect;
+  // Screen-space coordinates for display rendering
+  const sx = imageRect.x + r.x * scale;
+  const sy = imageRect.y + r.y * scale;
+  const sw = r.w * scale;
+  const sh = r.h * scale;
+  if (sw < 1 || sh < 1) return;
+
+  c.save();
+  c.beginPath();
+  c.rect(sx, sy, sw, sh);
+  c.clip();
+  c.filter = `blur(${ann.radius}px)`;
+  c.drawImage(img, imageRect.x, imageRect.y, imageRect.w, imageRect.h);
+  c.restore();
+
+  // Subtle border so the user can see the blur region
+  c.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  c.lineWidth = 1;
+  c.setLineDash([4, 4]);
+  c.strokeRect(sx, sy, sw, sh);
+  c.setLineDash([]);
+}
+
+/** Render a blur annotation at full resolution for the composite/save canvas.
+ *  No scale transform -- image-space coordinates only. */
+function drawBlurAnnotationFullRes(
+  c: CanvasRenderingContext2D,
+  ann: BlurAnnotation,
+  img: HTMLImageElement,
+) {
+  const r = ann.rect;
+  if (r.w < 1 || r.h < 1) return;
+
+  c.save();
+  c.beginPath();
+  c.rect(r.x, r.y, r.w, r.h);
+  c.clip();
+  c.filter = `blur(${ann.radius}px)`;
+  c.drawImage(img, 0, 0);
+  c.restore();
+}
+
 // -- Tool determination from modifiers --
 
 function toolFromModifiers(e: MouseEvent): string {
@@ -413,6 +469,8 @@ function annotationBoundingRect(ann: Annotation): { x: number; y: number; w: num
       const pad = ann.width / 2;
       return { x: ann.rect.x - pad, y: ann.rect.y - pad, w: ann.rect.w + ann.width, h: ann.rect.h + ann.width };
     }
+    case 'blur':
+      return { ...ann.rect };
   }
 }
 
@@ -556,6 +614,8 @@ function onMouseDown(e: MouseEvent) {
     currentAnnotation = { type: 'oval', rect: { x: pos.x, y: pos.y, w: 0, h: 0 }, color, width };
   } else if (tool === 'rect') {
     currentAnnotation = { type: 'rect', rect: { x: pos.x, y: pos.y, w: 0, h: 0 }, color, width };
+  } else if (tool === 'blur') {
+    currentAnnotation = { type: 'blur', rect: { x: pos.x, y: pos.y, w: 0, h: 0 }, radius: 12 };
   }
 
   isDrawing = true;
@@ -611,7 +671,7 @@ function onMouseMove(e: MouseEvent) {
     currentAnnotation.points.push(pos);
   } else if (currentAnnotation.type === 'arrow') {
     currentAnnotation.end = pos;
-  } else if ((currentAnnotation.type === 'oval' || currentAnnotation.type === 'rect') && dragStart) {
+  } else if ((currentAnnotation.type === 'oval' || currentAnnotation.type === 'rect' || currentAnnotation.type === 'blur') && dragStart) {
     const x = Math.min(dragStart.x, pos.x);
     const y = Math.min(dragStart.y, pos.y);
     const w = Math.abs(pos.x - dragStart.x);
@@ -658,7 +718,7 @@ function onMouseUp(e: MouseEvent) {
     const dx = currentAnnotation.end.x - currentAnnotation.start.x;
     const dy = currentAnnotation.end.y - currentAnnotation.start.y;
     if (Math.hypot(dx, dy) < MIN_DRAG_SIZE) discard = true;
-  } else if (currentAnnotation.type === 'oval' || currentAnnotation.type === 'rect') {
+  } else if (currentAnnotation.type === 'oval' || currentAnnotation.type === 'rect' || currentAnnotation.type === 'blur') {
     if (currentAnnotation.rect.w < MIN_DRAG_SIZE && currentAnnotation.rect.h < MIN_DRAG_SIZE) discard = true;
   }
 
@@ -1016,7 +1076,11 @@ async function compositeAndSave() {
 
   // Draw all annotations in image-space (no scale needed)
   for (const ann of undoStack) {
-    drawAnnotation(offCtx, ann);
+    if (ann.type === 'blur') {
+      drawBlurAnnotationFullRes(offCtx, ann, sourceImage);
+    } else {
+      drawAnnotation(offCtx, ann);
+    }
   }
 
   // Export as PNG base64
@@ -1077,6 +1141,7 @@ function initToolbar() {
     rect: document.getElementById('tool-rect')!,
     text: document.getElementById('tool-text')!,
     crop: document.getElementById('tool-crop')!,
+    blur: document.getElementById('tool-blur')!,
   };
 
   for (const [tool, btn] of Object.entries(toolBtns)) {

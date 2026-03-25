@@ -1,6 +1,6 @@
-/// Launch on startup -- cross-platform via tauri-plugin-autostart.
+/// Launch on startup via tauri-plugin-autostart.
 ///
-/// Handles Windows registry, macOS LaunchAgents, and Linux XDG autostart.
+/// Handles Windows registry and macOS LaunchAgents.
 
 use tauri::AppHandle;
 #[cfg(not(debug_assertions))]

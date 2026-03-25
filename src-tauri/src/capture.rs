@@ -261,11 +261,6 @@ fn get_cursor_position() -> Result<(i32, i32), AppError> {
   }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn get_cursor_position() -> Result<(i32, i32), AppError> {
-  // Fallback: return origin, will default to primary monitor
-  Ok((0, 0))
-}
 
 /// Convert RGBA image to RGB bytes without cloning the source image.
 /// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
@@ -448,11 +443,6 @@ pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), AppError> {
   Ok(())
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn copy_file_to_clipboard(_path: &std::path::Path) -> Result<(), AppError> {
-  // Linux: not yet implemented; silently succeed
-  Ok(())
-}
 
 /// Strip path-significant and Windows-reserved characters from filename parts.
 fn sanitize_filename_part(s: &str) -> String {
