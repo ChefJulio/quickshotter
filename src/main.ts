@@ -466,5 +466,89 @@ window.addEventListener('DOMContentLoaded', () => {
     await relaunch();
   });
 
+  // Reset to defaults UI
+  const resetBtn = document.getElementById('reset-btn')!;
+  const resetDropdown = document.getElementById('reset-dropdown')!;
+  const resetConfirm = document.getElementById('reset-confirm')!;
+  const resetConfirmMsg = document.getElementById('reset-confirm-msg')!;
+  const resetCancel = document.getElementById('reset-cancel')!;
+  const resetOk = document.getElementById('reset-ok')!;
+  let pendingResetSection = '';
+
+  resetBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    resetDropdown.style.display = resetDropdown.style.display === 'none' ? 'block' : 'none';
+  });
+
+  document.addEventListener('click', () => {
+    resetDropdown.style.display = 'none';
+  });
+
+  resetDropdown.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const btn = (e.target as HTMLElement).closest('button[data-section]') as HTMLElement | null;
+    if (!btn) return;
+    pendingResetSection = btn.dataset.section!;
+    const label = pendingResetSection === 'all' ? 'All' : btn.textContent!;
+    resetConfirmMsg.innerHTML = `Reset <strong>${label}</strong> settings to defaults?`;
+    resetDropdown.style.display = 'none';
+    resetConfirm.style.display = 'flex';
+  });
+
+  resetCancel.addEventListener('click', () => {
+    resetConfirm.style.display = 'none';
+  });
+
+  resetOk.addEventListener('click', async () => {
+    resetConfirm.style.display = 'none';
+    const defaults: AppConfig = await invoke('get_default_config');
+    const current = collectConfig();
+    const merged = applyDefaults(current, defaults, pendingResetSection);
+    applyConfig(merged);
+    await autoSave();
+  });
+
   loadConfig();
 });
+
+function applyDefaults(current: AppConfig, defaults: AppConfig, section: string): AppConfig {
+  const merged = { ...current };
+  if (section === 'general' || section === 'all') {
+    merged.save_folder = defaults.save_folder;
+    merged.format = defaults.format;
+    merged.filename_prefix = defaults.filename_prefix;
+    merged.filename_suffix = defaults.filename_suffix;
+    merged.clipboard_action = defaults.clipboard_action;
+    merged.save_to_disk = defaults.save_to_disk;
+    merged.capture_mode = defaults.capture_mode;
+    merged.fullscreen_mode = defaults.fullscreen_mode;
+    merged.capture_delay = defaults.capture_delay;
+    merged.launch_on_startup = defaults.launch_on_startup;
+    merged.explorer_context_menu = defaults.explorer_context_menu;
+  }
+  if (section === 'shortcuts' || section === 'all') {
+    merged.hotkey_region = defaults.hotkey_region;
+    merged.hotkey_fullscreen = defaults.hotkey_fullscreen;
+    merged.hotkey_window = defaults.hotkey_window;
+    merged.hotkey_ocr = defaults.hotkey_ocr;
+    merged.hotkey_record = defaults.hotkey_record;
+  }
+  if (section === 'recording' || section === 'all') {
+    merged.recording_format = defaults.recording_format;
+    merged.recording_fps = defaults.recording_fps;
+    merged.gif_max_duration = defaults.gif_max_duration;
+    merged.gif_max_width = defaults.gif_max_width;
+  }
+  if (section === 'annotations' || section === 'all') {
+    merged.annotate_captures = defaults.annotate_captures;
+    merged.annotate_default_tool = defaults.annotate_default_tool;
+    merged.annotate_shift_tool = defaults.annotate_shift_tool;
+    merged.annotate_ctrl_tool = defaults.annotate_ctrl_tool;
+    merged.annotate_alt_tool = defaults.annotate_alt_tool;
+    merged.annotate_right_default_tool = defaults.annotate_right_default_tool;
+    merged.annotate_right_shift_tool = defaults.annotate_right_shift_tool;
+    merged.annotate_right_ctrl_tool = defaults.annotate_right_ctrl_tool;
+    merged.annotate_right_alt_tool = defaults.annotate_right_alt_tool;
+  }
+  return merged;
+}

@@ -1208,6 +1208,11 @@ pub async fn save_config(
 }
 
 #[tauri::command]
+pub fn get_default_config() -> crate::config::AppConfig {
+  crate::config::AppConfig::default()
+}
+
+#[tauri::command]
 pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, AppError> {
   use tauri_plugin_dialog::DialogExt;
   let folder = app.dialog().file().blocking_pick_folder();

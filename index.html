@@ -226,6 +226,30 @@
       </div>
 
       <div id="save-error" class="save-error" style="display: none;"></div>
+
+      <div class="settings-footer">
+        <div class="reset-container">
+          <button id="reset-btn" type="button" class="reset-btn">Reset to Defaults</button>
+          <div id="reset-dropdown" class="reset-dropdown" style="display: none;">
+            <button data-section="general">General</button>
+            <button data-section="shortcuts">Shortcuts</button>
+            <button data-section="recording">Recording</button>
+            <button data-section="annotations">Annotations</button>
+            <hr />
+            <button data-section="all">All Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="reset-confirm" class="reset-confirm-overlay" style="display: none;">
+        <div class="reset-confirm-dialog">
+          <p id="reset-confirm-msg">Reset <strong>General</strong> settings to defaults?</p>
+          <div class="reset-confirm-actions">
+            <button id="reset-cancel" type="button">Cancel</button>
+            <button id="reset-ok" type="button" class="reset-ok">Reset</button>
+          </div>
+        </div>
+      </div>
     </main>
   </body>
 </html>

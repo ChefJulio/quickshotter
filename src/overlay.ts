@@ -429,12 +429,21 @@ async function captureWithDelay(
   }
 
   // Close overlay and open a small countdown window + selection border.
-  // Position countdown above-left of selection, pushed inside if at screen edge.
+  // Position countdown above the selection; if no room, try below; last resort: inside.
+  const countdownSize = 80;
   const pad = 8;
-  let posX = cssX1 - pad;
-  let posY = cssY1 - 80 - pad;
-  if (posY < 0) posY = cssY1 + pad;
-  if (posX < 0) posX = cssX1 + pad;
+  const selH = _cssY2 - cssY1;
+  let posX = Math.max(0, cssX1 - pad);
+  let posY = cssY1 - countdownSize - pad;
+  if (posY < 0) {
+    // Try below the selection
+    const belowY = cssY1 + selH + pad;
+    if (belowY + countdownSize <= window.innerHeight) {
+      posY = belowY;
+    } else {
+      posY = pad; // Last resort: top of screen
+    }
+  }
 
   invoke('prepare_delayed_capture', {
     params: captureParams,

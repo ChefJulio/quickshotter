@@ -314,3 +314,127 @@ button:hover {
   .update-status.success { color: #66bb6a; }
   .update-status.error { color: #ef9a9a; }
 }
+
+/* Reset to defaults */
+.settings-footer {
+  border-top: 1px solid #ddd;
+  padding: 8px 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reset-container {
+  position: relative;
+}
+
+.reset-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: #888;
+  background: transparent;
+  border: 1px solid #666;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.reset-btn:hover {
+  color: #e8e8e8;
+  border-color: #999;
+}
+
+.reset-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 160px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 100;
+}
+
+.reset-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 6px 14px;
+  font-size: 13px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #e8e8e8;
+  cursor: pointer;
+}
+
+.reset-dropdown button:hover {
+  background: #3a3a3a;
+}
+
+.reset-dropdown button[data-section="all"] {
+  color: #ef5350;
+}
+
+.reset-dropdown hr {
+  border: none;
+  border-top: 1px solid #444;
+  margin: 4px 0;
+}
+
+.reset-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.reset-confirm-dialog {
+  background: #2d2d2d;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 280px;
+  text-align: center;
+}
+
+.reset-confirm-dialog p {
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+
+.reset-confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+.reset-confirm-actions button {
+  padding: 6px 20px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.reset-ok {
+  background: #ef5350;
+  border-color: #c62828;
+  color: #fff;
+}
+
+.reset-ok:hover {
+  background: #c62828;
+}
+
+@media (prefers-color-scheme: light) {
+  .settings-footer { border-color: #ddd; }
+  .reset-btn { color: #666; border-color: #ccc; }
+  .reset-btn:hover { color: #333; border-color: #999; }
+  .reset-dropdown { background: #fff; border-color: #ddd; }
+  .reset-dropdown button { color: #333; }
+  .reset-dropdown button:hover { background: #f0f0f0; }
+  .reset-confirm-dialog { background: #fff; border-color: #ddd; }
+}

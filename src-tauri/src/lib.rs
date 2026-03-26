@@ -79,6 +79,7 @@ pub fn run() {
       commands::get_pending_screenshot,
       commands::get_config,
       commands::save_config,
+      commands::get_default_config,
       commands::pick_folder,
       commands::trigger_window_capture,
       commands::get_window_at_cursor,
