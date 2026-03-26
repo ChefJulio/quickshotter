@@ -159,6 +159,7 @@ quickshotter/
     ├── context_menu.rs        Windows Explorer context menu registration
     ├── ocr.rs                 Platform-native OCR (WinRT / Apple Vision)
     ├── imgur.rs               Upload to catbox.moe
+    ├── coords.rs              Unified coordinate conversion (physical/CSS/Tauri logical)
     ├── config.rs              Config struct, JSON persistence, defaults
     ├── state.rs               AppState with mutex poison recovery
     ├── error.rs               Unified AppError enum
@@ -180,6 +181,7 @@ quickshotter/
 - No persistent main window -- the app is tray-only between operations
 - Single instance enforced via `tauri-plugin-single-instance`
 - Atomic state transitions prevent duplicate captures from rapid hotkey presses
+- Three coordinate spaces (physical screen, overlay CSS, Tauri logical) with all conversions centralized in `coords.rs` -- JS converts CSS to physical before IPC, Rust converts physical to Tauri logical for window positioning
 
 ---
 
@@ -189,6 +191,7 @@ quickshotter/
 
 - **Duplicate-capture prevention** -- atomic `is_capturing` flag; rapid hotkey presses are silently ignored
 - **Multi-monitor DPI-aware stitching** -- detects per-monitor scale factors and normalizes to uniform physical resolution
+- **Per-monitor coordinate conversion** -- countdown timers and selection borders are positioned via `coords::to_tauri_pos()` which finds the correct monitor's scale factor, preventing windows from appearing on the wrong screen
 - **Virtual desktop size limit** -- caps at 64 million pixels (~256MB RGBA) to prevent out-of-memory crashes
 - **Minimum selection size** -- enforced in both Rust (3x3px) and TypeScript (3x3px)
 - **Safe crop with bounds clamping** -- clamps coordinates before cropping to prevent panics from out-of-bounds values
@@ -235,6 +238,7 @@ quickshotter/
 - **Backpressure on window queries** -- an `AtomicBool` flag skips new polls if the previous query is still running
 - **500ms timeout** on window detection queries to prevent indefinite hangs
 - **Bounded recording pipeline** -- capture and encoder threads connected via bounded channel (4 frames max)
+- **Unified coordinate system** -- all window positioning flows through `coords.rs` which converts between physical screen pixels (xcap/Win32), overlay CSS pixels, and Tauri logical coordinates via per-monitor scale factor lookup
 - **DPI-aware coordinate mapping** -- uses actual screenshot dimensions divided by canvas dimensions instead of relying on `devicePixelRatio` alone
 - **Dev build optimization** -- third-party crates compiled at `opt-level = 2` even in debug builds, critical for the `image` crate's pixel processing
 
