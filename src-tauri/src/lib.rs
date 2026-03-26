@@ -1,6 +1,7 @@
 mod capture;
 mod commands;
 mod config;
+mod coords;
 mod context_menu;
 mod error;
 mod hotkeys;

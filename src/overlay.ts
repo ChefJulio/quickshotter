@@ -428,31 +428,36 @@ async function captureWithDelay(
     return;
   }
 
-  // Close overlay and open a small countdown window + selection border.
+  // Convert selection CSS coords to physical screen coords.
+  // All coordinates sent to Rust are now in physical screen pixels.
+  const s = xcapScale; // DPR on Windows, 1 on macOS
+  const toPhysX = (css: number) => Math.round(css * s + overlayOriginX);
+  const toPhysY = (css: number) => Math.round(css * s + overlayOriginY);
+  const toPhysW = (css: number) => Math.round(css * s);
+
   // Position countdown above the selection; if no room, try below; last resort: inside.
   const countdownSize = 80;
   const pad = 8;
   const selH = _cssY2 - cssY1;
-  let posX = Math.max(0, cssX1 - pad);
+  let posX = Math.max(pad, cssX1 - pad);
   let posY = cssY1 - countdownSize - pad;
   if (posY < 0) {
-    // Try below the selection
     const belowY = cssY1 + selH + pad;
     if (belowY + countdownSize <= window.innerHeight) {
       posY = belowY;
     } else {
-      posY = pad; // Last resort: top of screen
+      posY = pad;
     }
   }
 
   invoke('prepare_delayed_capture', {
     params: captureParams,
-    posX,
-    posY,
-    selX: cssX1,
-    selY: cssY1,
-    selW: _cssX2 - cssX1,
-    selH: _cssY2 - cssY1,
+    posX: toPhysX(posX),
+    posY: toPhysY(posY),
+    selX: toPhysX(cssX1),
+    selY: toPhysY(cssY1),
+    selW: toPhysW(_cssX2 - cssX1),
+    selH: toPhysW(_cssY2 - cssY1),
   }).catch((e) => {
     console.error('Prepare delayed capture failed:', e);
   });
@@ -606,16 +611,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   initCanvas();
   try {
     mode = await invoke<string>('get_overlay_mode');
+    // Always fetch overlay origin — needed for CSS→physical conversion in all modes
+    const origin = await invoke<[number, number]>('get_overlay_origin');
+    overlayOriginX = origin[0];
+    overlayOriginY = origin[1];
+
     if (mode === 'select_screen') {
-      const origin = await invoke<[number, number]>('get_overlay_origin');
-      overlayOriginX = origin[0];
-      overlayOriginY = origin[1];
       monitors = await invoke<MonitorInfo[]>('get_monitor_list');
       showSelectScreenOverlay();
     } else if (mode === 'window') {
-      const origin = await invoke<[number, number]>('get_overlay_origin');
-      overlayOriginX = origin[0];
-      overlayOriginY = origin[1];
       showWindowOverlay();
     } else if (mode === 'freeze') {
       const base64Data: string = await invoke('get_pending_screenshot');

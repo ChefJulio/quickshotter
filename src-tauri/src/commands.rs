@@ -175,27 +175,30 @@ pub async fn prepare_delayed_capture(
     std::thread::sleep(std::time::Duration::from_millis(150));
   }).await;
 
-  // Convert overlay-local CSS coords to screen coords by adding desktop origin.
-  // The overlay is positioned at desktop bounds origin.
-  let (bounds_x, bounds_y) = capture::get_desktop_bounds()
-    .map(|b| (b.x, b.y))
-    .unwrap_or((0, 0));
-  let screen_x = pos_x + bounds_x as f64;
-  let screen_y = pos_y + bounds_y as f64;
+  // All positions are now in physical screen coordinates (converted by JS).
+  // Use the coords module to convert to Tauri logical for .position()/.inner_size().
+  use crate::coords::{self, ScreenPoint, ScreenSize};
 
   // Register a temporary global ESC shortcut to cancel the countdown.
-  // This works regardless of which window has focus.
   {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
     let esc: Shortcut = "Escape".parse().unwrap();
     let app2 = app.clone();
     app.global_shortcut().on_shortcut(esc, move |_app, _shortcut, _event| {
       cancel_delayed_capture(app2.clone());
-      // Unregister ESC shortcut (cleanup happens in cancel/execute)
     }).ok();
   }
 
-  // Open a small countdown window near the selection
+  // Position countdown window — clamp to the target monitor so it
+  // doesn't spill onto an adjacent screen.
+  let countdown_phys = ScreenPoint { x: pos_x, y: pos_y };
+  let countdown_size = ScreenSize { w: 80.0, h: 80.0 };
+  let (countdown_phys, countdown_size) = coords::clamp_to_monitor(
+    countdown_phys, countdown_size, countdown_phys, &app,
+  );
+  let (cx, cy) = coords::to_tauri_pos(countdown_phys, &app);
+  let (cw, ch) = coords::to_tauri_size(countdown_size, countdown_phys, &app);
+
   use tauri::{WebviewUrl, WebviewWindowBuilder};
   WebviewWindowBuilder::new(&app, "countdown", WebviewUrl::App("countdown.html".into()))
     .title("Countdown")
@@ -204,19 +207,23 @@ pub async fn prepare_delayed_capture(
     .shadow(false)
     .always_on_top(true)
     .resizable(false)
-    .inner_size(80.0, 80.0)
-    .position(screen_x, screen_y)
+    .inner_size(cw, ch)
+    .position(cx, cy)
     .skip_taskbar(true)
     .build()
     .map_err(|e| AppError::Capture(format!("Failed to open countdown: {e}")))?;
 
-  // Create a selection border window if selection bounds were provided
+  // Selection border — clamp to the monitor containing the selection center.
   if let (Some(sx), Some(sy), Some(sw), Some(sh)) = (sel_x, sel_y, sel_w, sel_h) {
     if sw > 0.0 && sh > 0.0 {
-      let bx = sx + bounds_x as f64;
-      let by = sy + bounds_y as f64;
-      // Offset slightly outside the selection (border is 2px, add 3px padding)
       let pad = 3.0;
+      let border_pos = ScreenPoint { x: sx - pad, y: sy - pad };
+      let border_size = ScreenSize { w: sw + pad * 2.0, h: sh + pad * 2.0 };
+      let sel_center = ScreenPoint { x: sx + sw / 2.0, y: sy + sh / 2.0 };
+      let (bp, bs) = coords::clamp_to_monitor(border_pos, border_size, sel_center, &app);
+      let (bx, by) = coords::to_tauri_pos(bp, &app);
+      let (bw, bh) = coords::to_tauri_size(bs, bp, &app);
+
       WebviewWindowBuilder::new(&app, "delay-border", WebviewUrl::App("delay-border.html".into()))
         .title("Selection")
         .transparent(true)
@@ -224,11 +231,11 @@ pub async fn prepare_delayed_capture(
         .shadow(false)
         .always_on_top(true)
         .resizable(false)
-        .inner_size(sw + pad * 2.0, sh + pad * 2.0)
-        .position(bx - pad, by - pad)
+        .inner_size(bw, bh)
+        .position(bx, by)
         .skip_taskbar(true)
         .build()
-        .ok(); // Non-critical, don't fail the capture if border window fails
+        .ok();
     }
   }
 
@@ -383,7 +390,7 @@ pub fn delayed_fullscreen_capture(app: &AppHandle) {
 
     // Detect which monitor the cursor is on NOW (before the countdown runs)
     // so "current screen" captures the right one even if the user moves the cursor.
-    // Extract position data synchronously (xcap::Monitor is not Send).
+    // Coordinates are physical screen pixels — prepare_delayed_capture expects physical.
     let (cursor_monitor_idx, countdown_x, countdown_y) = {
       let monitors = xcap::Monitor::all().unwrap_or_default();
       let (cx, cy) = capture::get_cursor_position_public();
@@ -394,18 +401,10 @@ pub fn delayed_fullscreen_capture(app: &AppHandle) {
         let Ok(mh) = m.height() else { return false };
         cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32
       }).unwrap_or(0);
-      // Position is in absolute screen coords, but prepare_delayed_capture
-      // adds desktop bounds origin (for overlay-relative CSS coords), so
-      // subtract bounds here to compensate.
-      let (bx, by) = capture::get_desktop_bounds()
-        .map(|b| (b.x as f64, b.y as f64))
-        .unwrap_or((0.0, 0.0));
       let (px, py) = if let Some(m) = monitors.get(idx) {
-        let mx = m.x().unwrap_or(0) as f64;
-        let my = m.y().unwrap_or(0) as f64;
-        (mx + 16.0 - bx, my + 16.0 - by)
+        (m.x().unwrap_or(0) as f64 + 16.0, m.y().unwrap_or(0) as f64 + 16.0)
       } else {
-        (16.0 - bx, 16.0 - by)
+        (16.0, 16.0)
       };
       (idx, px, py)
     };
