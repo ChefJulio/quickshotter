@@ -104,7 +104,7 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     let app2 = app.clone();
     let copy_url = clipboard_action == "url";
     tauri::async_runtime::spawn(async move {
-      match crate::imgur::upload(&img2).await {
+      match crate::catbox::upload(&img2).await {
         Ok(url) => {
           if copy_url {
             capture::copy_text_to_clipboard(&url).ok();
@@ -1321,7 +1321,7 @@ pub async fn upload_last_to_imgur(app: AppHandle) -> Result<String, AppError> {
     .map_err(|e| AppError::Upload(format!("Failed to read image: {e}")))?
     .to_rgba8();
 
-  let url = crate::imgur::upload(&img).await?;
+  let url = crate::catbox::upload(&img).await?;
   capture::copy_text_to_clipboard(&url)?;
 
   use tauri_plugin_notification::NotificationExt;

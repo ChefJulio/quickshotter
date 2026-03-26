@@ -64,10 +64,6 @@ pub struct AppConfig {
   pub gif_max_width: u32,
 }
 
-fn default_true() -> bool {
-  true
-}
-
 fn default_clipboard_action() -> String {
   "image".to_string()
 }

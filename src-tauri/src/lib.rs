@@ -5,7 +5,7 @@ mod coords;
 mod context_menu;
 mod error;
 mod hotkeys;
-mod imgur;
+mod catbox;
 mod ocr;
 mod overlay;
 mod recording;

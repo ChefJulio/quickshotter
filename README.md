@@ -1,8 +1,10 @@
 # QuickShotter
 
-A lightweight screenshot and screen recording tool for Windows and macOS, built with Tauri 2, Rust, and TypeScript. Lives in your system tray with no persistent window -- all UI is transient and on-demand.
+A screenshot and screen recording tool for Windows and macOS, built with Tauri 2. Lives in your system tray with no persistent window -- capture, annotate, and share without interrupting your workflow.
 
 **Platforms:** Windows, macOS (Intel + Apple Silicon)
+
+**[Download the latest release](https://github.com/ChefJulio/quickshotter/releases/latest)**
 
 ---
 
@@ -40,14 +42,13 @@ A lightweight screenshot and screen recording tool for Windows and macOS, built 
 
 | Format | Description |
 |--------|-------------|
-| **MP4** (H.264) | Hardware-accelerated via Media Foundation (Windows) or VideoToolbox (macOS), with openh264 software fallback |
-| **GIF** | Configurable max duration and max width, with automatic downscaling and color quantization |
+| **MP4** (H.264) | Hardware-accelerated with automatic GPU encoder selection and software fallback |
+| **GIF** | Configurable max duration and max width, with automatic downscaling |
 
 - **Record hotkey** (`Ctrl+Alt+Shift+R`) for quick start/stop toggle
 - **Region recording** -- select a screen area to record
 - Floating recording indicator with elapsed time and stop button
 - Configurable frame rate (10/15/24/30 FPS)
-- GPU encoder auto-selection: NVENC, AMF, QuickSync, or D3D11 on Windows; VideoToolbox on macOS; CPU fallback if needed
 
 ### Annotation Editor
 
@@ -61,8 +62,8 @@ Opens in its own resizable window (not a fullscreen overlay) so you can referenc
 | **Arrow** | Three styles: filled, hollow, and double-headed |
 | **Oval / Ellipse** | Drag to define bounding box |
 | **Rectangle** | Drag to define bounding box |
-| **Text** | Click to place inline text input, draggable after placement, with black background for readability |
-| **Blur** | Drag to select a region that gets a gaussian blur applied (for redacting sensitive content) |
+| **Text** | Click to place inline text input, draggable after placement |
+| **Blur** | Drag to select a region for gaussian blur (redacting sensitive content) |
 | **Step numbering** | Sequential numbered circles for tutorial/workflow documentation |
 | **Grab Text (OCR)** | Select a region and extract text via platform OCR |
 
@@ -92,8 +93,8 @@ Annotations are composited at **full original resolution**, not display resoluti
 
 Accessible from the system tray (left-click), organized into tabbed panels:
 
-- **General** -- save folder (with real-time writability validation), save format, filename prefix/date format, clipboard action, save-to-disk toggle, capture mode (instant vs. freeze), fullscreen mode (all/current/select), capture delay, launch on startup, Explorer context menu toggle (Windows)
-- **Shortcuts** -- hotkey bindings via inline key recorder (click to arm, press your combo) for region, fullscreen, window, OCR, and record
+- **General** -- save folder, save format, filename prefix/date format, clipboard action, save-to-disk toggle, capture mode (instant vs. freeze), fullscreen mode (all/current/select), capture delay, launch on startup, Explorer context menu toggle (Windows)
+- **Shortcuts** -- hotkey bindings via inline key recorder (click to arm, press your combo)
 - **Recording** -- format (MP4/GIF), frame rate, GIF max duration and max width
 - **Annotations** -- annotation toggle, left-click tool mappings (default + 3 modifiers), right-click tool mappings (default + 3 modifiers)
 - **About** -- version display, in-app update checker
@@ -124,12 +125,61 @@ Annotate existing images on disk without capturing:
 
 - Check for updates directly from the About tab
 - Downloads and installs updates with progress tracking
-- Signed update bundles verified against a minisign public key
 - Restart prompt after install -- no manual download needed
 
 ---
 
-## Architecture
+## Configuration
+
+Config is stored in the platform-specific app data directory:
+
+| Platform | Path |
+|----------|------|
+| Windows | `%APPDATA%\QuickShotter\config\config.json` |
+| macOS | `~/Library/Application Support/com.quickshotter.app/config/config.json` |
+
+All configuration changes are validated before being persisted.
+
+---
+
+## CI/CD
+
+GitHub Actions automatically builds on tag push (`v*`) for:
+
+| Platform | Output |
+|----------|--------|
+| Windows x64 | NSIS installer (`.exe`) |
+| macOS ARM | DMG (Apple Silicon) |
+| macOS Intel | DMG (x86_64) |
+
+Releases are auto-published with a download table. Each release includes signed update bundles and a `latest.json` manifest for the in-app auto-updater.
+
+---
+
+## Development
+
+### Building from Source
+
+**Prerequisites:** [Node.js](https://nodejs.org/) 20+, [Rust](https://www.rust-lang.org/tools/install) (stable)
+
+```bash
+npm install
+npm run tauri dev    # Development
+npm run tauri build  # Production
+```
+
+### Tech Stack
+
+**Backend (Rust):**
+tauri 2, image, arboard, xcap, chrono, base64, serde, thiserror, directories, openh264, gif, reqwest
+
+**Frontend (TypeScript):**
+@tauri-apps/api, @tauri-apps/plugin-global-shortcut, @tauri-apps/plugin-updater, @tauri-apps/plugin-process, vite, typescript
+
+**Tauri Plugins:**
+single-instance, global-shortcut, dialog, notification, autostart, updater, process
+
+### Architecture
 
 ```
 quickshotter/
@@ -158,7 +208,7 @@ quickshotter/
     ├── window_capture.rs      Background window detection worker thread
     ├── context_menu.rs        Windows Explorer context menu registration
     ├── ocr.rs                 Platform-native OCR (WinRT / Apple Vision)
-    ├── imgur.rs               Upload to catbox.moe
+    ├── catbox.rs              Upload to catbox.moe
     ├── coords.rs              Unified coordinate conversion (physical/CSS/Tauri logical)
     ├── config.rs              Config struct, JSON persistence, defaults
     ├── state.rs               AppState with mutex poison recovery
@@ -181,29 +231,42 @@ quickshotter/
 - No persistent main window -- the app is tray-only between operations
 - Single instance enforced via `tauri-plugin-single-instance`
 - Atomic state transitions prevent duplicate captures from rapid hotkey presses
-- Three coordinate spaces (physical screen, overlay CSS, Tauri logical) with all conversions centralized in `coords.rs` -- JS converts CSS to physical before IPC, Rust converts physical to Tauri logical for window positioning
+- Three coordinate spaces (physical screen, overlay CSS, Tauri logical) with all conversions centralized in `coords.rs`
 
----
+### Performance Notes
 
-## Safeguards
+- JPEG encoding for previews (quality 80) keeps overlay response fast; PNG used only for annotation where lossless matters
+- In-place RGBA-to-RGB conversion strips the alpha channel without cloning the source image
+- Persistent worker thread for window detection avoids per-poll thread-spawn overhead
+- Backpressure on window queries skips new polls if the previous query is still running (500ms timeout)
+- Bounded recording pipeline -- capture and encoder threads connected via bounded channel (4 frames max)
+- All window positioning flows through `coords.rs` which converts between physical screen pixels, overlay CSS pixels, and Tauri logical coordinates via per-monitor scale factor lookup
+- Dev build optimization -- third-party crates compiled at `opt-level = 2` even in debug builds
 
-### Capture Safety
+### Safeguards
+
+<details>
+<summary>Capture safety</summary>
 
 - **Duplicate-capture prevention** -- atomic `is_capturing` flag; rapid hotkey presses are silently ignored
 - **Multi-monitor DPI-aware stitching** -- detects per-monitor scale factors and normalizes to uniform physical resolution
-- **Per-monitor coordinate conversion** -- countdown timers and selection borders are positioned via `coords::to_tauri_pos()` which finds the correct monitor's scale factor, preventing windows from appearing on the wrong screen
+- **Per-monitor coordinate conversion** -- countdown timers and selection borders are positioned via `coords::to_tauri_pos()` which finds the correct monitor's scale factor
 - **Virtual desktop size limit** -- caps at 64 million pixels (~256MB RGBA) to prevent out-of-memory crashes
 - **Minimum selection size** -- enforced in both Rust (3x3px) and TypeScript (3x3px)
 - **Safe crop with bounds clamping** -- clamps coordinates before cropping to prevent panics from out-of-bounds values
 - **State cleanup on every error path** -- `is_capturing` is always reset so captures are never permanently blocked
 - **Single-monitor fast path** -- skips stitching logic for the common single-monitor case
+</details>
 
-### macOS-Specific
+<details>
+<summary>macOS-specific</summary>
 
 - **Blank screenshot detection** -- samples every ~997th pixel (prime stride to avoid repeating patterns); shows a permission notification if all pixels are black
 - **Accessibility permission hint** -- hotkey registration failure includes a message directing the user to System Settings
+</details>
 
-### Input Validation and Security
+<details>
+<summary>Input validation and security</summary>
 
 - **Filename sanitization** -- strips path-traversal and reserved characters (`/\:<>|"?*\0` and `..`)
 - **Path traversal safety net** -- extracts the final `file_name()` component after sanitization, guaranteeing no directory traversal
@@ -212,89 +275,23 @@ quickshotter/
 - **Hotkey validation before persistence** -- parses and re-registers hotkeys before writing config; invalid hotkeys reject the entire save
 - **Annotation base64 size limit** -- 134MB cap to prevent out-of-memory from oversized payloads
 - **Content Security Policy** -- blocks external network requests; only allows `self` and `data:` URLs
+</details>
 
-### State Management
+<details>
+<summary>State management</summary>
 
 - **Mutex poison recovery** -- a custom `LockRecover` trait recovers from poisoned mutexes instead of panicking, preventing cascading thread crashes
 - **Config atomicity** -- all validators run before any config is persisted; partial or broken state is never written to disk
 - **Single instance enforcement** -- duplicate processes are silently terminated; CLI args forwarded to existing instance
 - **Accidental exit prevention** -- window-close events are blocked; only the explicit Exit action from the tray menu can quit the app
 - **Bounded capture history** -- capped at 5 entries to prevent unbounded growth
+</details>
 
-### Error Handling
+<details>
+<summary>Error handling</summary>
 
 - **Unified `AppError` enum** -- `Capture`, `Clipboard`, `Io`, `Config`, `Window`, `Annotation`, and `Tauri` variants with clear messages
 - All IPC commands return `Result<T, AppError>`
 - Inline error banners and real-time validation warnings in the settings UI
 - Graceful degradation -- invalid states trigger fallbacks rather than crashes
-
----
-
-## Performance
-
-- **JPEG for previews** (quality 80, ~10x faster encoding), **PNG for annotation** (lossless)
-- **Memory-efficient RGBA-to-RGB conversion** -- strips the alpha channel without cloning the source image (~33% less peak memory)
-- **Persistent worker thread** for window detection -- avoids ~1ms thread-spawn overhead per cursor poll
-- **Backpressure on window queries** -- an `AtomicBool` flag skips new polls if the previous query is still running
-- **500ms timeout** on window detection queries to prevent indefinite hangs
-- **Bounded recording pipeline** -- capture and encoder threads connected via bounded channel (4 frames max)
-- **Unified coordinate system** -- all window positioning flows through `coords.rs` which converts between physical screen pixels (xcap/Win32), overlay CSS pixels, and Tauri logical coordinates via per-monitor scale factor lookup
-- **DPI-aware coordinate mapping** -- uses actual screenshot dimensions divided by canvas dimensions instead of relying on `devicePixelRatio` alone
-- **Dev build optimization** -- third-party crates compiled at `opt-level = 2` even in debug builds, critical for the `image` crate's pixel processing
-
----
-
-## Building from Source
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) 20+
-- [Rust](https://www.rust-lang.org/tools/install) (stable)
-
-### Build and Run
-
-```bash
-npm install
-npm run tauri dev    # Development
-npm run tauri build  # Production
-```
-
----
-
-## CI/CD
-
-GitHub Actions automatically builds on tag push (`v*`) for:
-
-| Platform | Output |
-|----------|--------|
-| Windows x64 | NSIS installer (`.exe`) |
-| macOS ARM | DMG (Apple Silicon) |
-| macOS Intel | DMG (x86_64) |
-
-Releases are auto-published with a download table. Each release includes signed update bundles and a `latest.json` manifest for the in-app auto-updater.
-
----
-
-## Configuration
-
-Config is stored in the platform-specific app data directory:
-
-| Platform | Path |
-|----------|------|
-| Windows | `%APPDATA%\QuickShotter\config\config.json` |
-| macOS | `~/Library/Application Support/com.quickshotter.app/config/config.json` |
-
-All configuration changes are validated atomically before being persisted.
-
----
-
-## Tech Stack
-
-**Backend (Rust):**
-tauri 2, image, arboard, xcap, chrono, base64, serde, thiserror, directories, openh264, gif, reqwest
-
-**Frontend (TypeScript):**
-@tauri-apps/api, @tauri-apps/plugin-global-shortcut, @tauri-apps/plugin-updater, @tauri-apps/plugin-process, vite, typescript
-
-**Tauri Plugins:**
-single-instance, global-shortcut, dialog, notification, autostart, updater, process
+</details>
