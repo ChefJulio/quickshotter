@@ -1,6 +1,6 @@
 [package]
 name = "quickshotter"
-version = "1.0.9"
+version = "1.0.10"
 description = "Fast cross-platform screenshot tool"
 authors = ["you"]
 edition = "2021"

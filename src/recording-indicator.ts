@@ -24,6 +24,7 @@ async function init() {
   const savedLabel = document.getElementById('saved-label')!;
   const folderBtn = document.getElementById('folder-btn')!;
   const closeBtn = document.getElementById('close-btn')!;
+  const cancelBtn = document.getElementById('cancel-btn')!;
 
   let stoppingManually = false;
   let savedFilepath: string | null = null;
@@ -62,6 +63,15 @@ async function init() {
   }
 
   closeBtn.addEventListener('click', closeWindow);
+
+  cancelBtn.addEventListener('click', async () => {
+    stoppingManually = true;
+    cancelBtn.textContent = '...';
+    try {
+      await invoke('stop_recording');
+    } catch { /* already stopped */ }
+    closeWindow();
+  });
 
   folderBtn.addEventListener('click', async () => {
     if (savedFilepath) {

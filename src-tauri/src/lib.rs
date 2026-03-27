@@ -165,6 +165,15 @@ pub fn run() {
           state.pending_annotation = None;
           state.pending_annotation_base64 = None;
           state.annotation_source_path = None;
+        } else if label == "recording-indicator" {
+          // If the indicator is destroyed while recording, stop the recording
+          let is_recording = s.lock_or_recover().is_recording;
+          if is_recording {
+            let app = window.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+              crate::commands::stop_recording(app).await.ok();
+            });
+          }
         }
       }
     })

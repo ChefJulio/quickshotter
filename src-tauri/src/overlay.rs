@@ -59,10 +59,13 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
   // Freeze mode captures upfront for a frozen preview.
   // Window mode skips this -- it shows a transparent overlay and captures on click.
-  // On macOS, ALL modes pre-capture because hiding the overlay and recapturing
+  // On macOS, screenshot modes pre-capture because hiding the overlay and recapturing
   // has unreliable timing -- the compositor may not finish re-rendering windows
   // within the delay, resulting in only the desktop background being captured.
-  let needs_capture = mode == "freeze" || cfg!(target_os = "macos");
+  // Recording always uses instant mode -- freezing the screen for region selection
+  // makes no sense when the goal is to capture live video.
+  let is_recording = mode == "record_region";
+  let needs_capture = !is_recording && (mode == "freeze" || cfg!(target_os = "macos"));
 
   if needs_capture {
     let screen = match capture::capture_all_monitors() {
