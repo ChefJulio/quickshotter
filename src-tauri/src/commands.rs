@@ -1426,19 +1426,30 @@ fn safe_crop(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> Result<RgbaImag
   Ok(image::imageops::crop_imm(img, x, y, w, h).to_image())
 }
 
+/// Pre-create the settings window hidden at startup so it opens instantly.
+pub fn precreate_settings_window(app: &AppHandle) {
+  WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    .title("QuickShotter Settings")
+    .inner_size(480.0, 620.0)
+    .resizable(false)
+    .center()
+    .always_on_top(true)
+    .visible(false)
+    .build()
+    .ok();
+}
+
 pub fn show_settings_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("settings") {
     window.show().ok();
     window.set_focus().ok();
   } else {
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-      .title("QuickShotter Settings")
-      .inner_size(480.0, 620.0)
-      .resizable(false)
-      .center()
-      .always_on_top(true)
-      .build()
-      .ok();
+    // Fallback: create if it doesn't exist (shouldn't happen)
+    precreate_settings_window(app);
+    if let Some(window) = app.get_webview_window("settings") {
+      window.show().ok();
+      window.set_focus().ok();
+    }
   }
 }
 

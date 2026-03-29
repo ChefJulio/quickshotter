@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{
   AppHandle, Manager,
-  menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
+  menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
   tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -130,66 +130,52 @@ pub fn build_tray_menu(
 ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
   let mut builder = MenuBuilder::new(app);
 
-  let region_label = format!("Capture Region  ({})", format_hotkey_display(&config.hotkey_region));
-  let window_label = format!("Capture Window  ({})", format_hotkey_display(&config.hotkey_window));
-  let fullscreen_label = format!("Capture Fullscreen  ({})", format_hotkey_display(&config.hotkey_fullscreen));
+  // Capture submenu
+  let capture_sub = SubmenuBuilder::with_id(app, "capture_menu", "Capture")
+    .item(&MenuItemBuilder::with_id("capture_region",
+      &format!("Region  ({})", format_hotkey_display(&config.hotkey_region))).build(app)?)
+    .item(&MenuItemBuilder::with_id("capture_window",
+      &format!("Window  ({})", format_hotkey_display(&config.hotkey_window))).build(app)?)
+    .item(&MenuItemBuilder::with_id("capture_fullscreen",
+      &format!("Screen  ({})", format_hotkey_display(&config.hotkey_fullscreen))).build(app)?)
+    .item(&MenuItemBuilder::with_id("ocr_region",
+      &format!("Text (OCR)  ({})", format_hotkey_display(&config.hotkey_ocr))).build(app)?)
+    .build()?;
+  builder = builder.item(&capture_sub);
 
-  builder = builder.item(
-    &MenuItemBuilder::with_id("capture_region", &region_label)
-      .build(app)?,
-  );
-  builder = builder.item(
-    &MenuItemBuilder::with_id("capture_window", &window_label)
-      .build(app)?,
-  );
-  builder = builder.item(
-    &MenuItemBuilder::with_id("capture_fullscreen", &fullscreen_label)
-      .build(app)?,
-  );
-
-  let ocr_label = format!("OCR Region  ({})", format_hotkey_display(&config.hotkey_ocr));
-  builder = builder.item(
-    &MenuItemBuilder::with_id("ocr_region", &ocr_label)
-      .build(app)?,
-  );
-
-  builder = builder.item(&PredefinedMenuItem::separator(app)?);
-
-  // Recording items: show "Stop Recording" when active, otherwise show "Record Screen"
+  // Record submenu
   let is_recording = app.state::<Mutex<AppState>>().lock_or_recover().is_recording;
-  if is_recording {
-    builder = builder.item(
-      &MenuItemBuilder::with_id("stop_recording", "Stop Recording")
-        .build(app)?,
-    );
+  let record_sub = if is_recording {
+    SubmenuBuilder::with_id(app, "record_menu", "Record")
+      .item(&MenuItemBuilder::with_id("stop_recording", "Stop Recording").build(app)?)
+      .build()?
   } else {
-    let record_region_label = format!("Record Region  ({})", format_hotkey_display(&config.hotkey_record));
-    builder = builder.item(
-      &MenuItemBuilder::with_id("record_region", &record_region_label)
-        .build(app)?,
-    );
-    builder = builder.item(
-      &MenuItemBuilder::with_id("record_screen", "Record Fullscreen")
-        .build(app)?,
-    );
-  }
+    SubmenuBuilder::with_id(app, "record_menu", "Record")
+      .item(&MenuItemBuilder::with_id("record_region",
+        &format!("Region  ({})", format_hotkey_display(&config.hotkey_record))).build(app)?)
+      .item(&MenuItemBuilder::with_id("record_screen", "Fullscreen").build(app)?)
+      .build()?
+  };
+  builder = builder.item(&record_sub);
 
+  // Recent captures submenu
   if !history.is_empty() {
-    builder = builder.item(&PredefinedMenuItem::separator(app)?);
+    let mut recent = SubmenuBuilder::with_id(app, "recent_menu", "Recent");
     for (i, path) in history.iter().rev().enumerate() {
       let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| format!("Capture {}", i + 1));
-      builder = builder.item(
+      recent = recent.item(
         &MenuItemBuilder::with_id(format!("history_{}", history.len() - 1 - i), &name)
           .build(app)?,
       );
     }
+    builder = builder.item(&recent.build()?);
   }
 
   builder = builder.item(&PredefinedMenuItem::separator(app)?);
-  builder = builder.item(&MenuItemBuilder::with_id("upload_imgur", "Upload Last to catbox.moe").build(app)?);
+  builder = builder.item(&MenuItemBuilder::with_id("upload_imgur", "Upload to catbox.moe").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("annotate_file", "Annotate File...").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("exit", "Exit").build(app)?);

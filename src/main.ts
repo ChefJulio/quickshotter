@@ -508,6 +508,9 @@ window.addEventListener('DOMContentLoaded', () => {
     await autoSave();
   });
 
+  // Load config and populate all fields.
+  // Don't auto-show — the window is pre-created hidden at startup.
+  // show_settings_window() in Rust handles making it visible when the user clicks.
   loadConfig();
 });
 

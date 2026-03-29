@@ -138,9 +138,12 @@ pub fn run() {
       // presses their first hotkey.
       overlay::spawn_daemon();
 
+      // Pre-create settings window hidden so it opens instantly on first click.
+      commands::precreate_settings_window(&app.handle());
+
+      use tauri_plugin_notification::NotificationExt;
       if let Err(e) = hotkeys::register_hotkeys(&app.handle()) {
         eprintln!("Failed to register hotkeys: {e}");
-        use tauri_plugin_notification::NotificationExt;
         #[cfg(target_os = "macos")]
         let body = format!("Failed to register hotkeys: {}\nCheck System Settings > Privacy & Security > Accessibility", e);
         #[cfg(not(target_os = "macos"))]
@@ -151,11 +154,29 @@ pub fn run() {
           .body(&body)
           .show()
           .ok();
+      } else {
+        let hotkey = app.state::<Mutex<state::AppState>>().lock_or_recover()
+          .config.hotkey_region.clone();
+        app.handle().notification()
+          .builder()
+          .title("QuickShotter ready")
+          .body(&format!("Press {} to capture", hotkey))
+          .show()
+          .ok();
       }
 
       Ok(())
     })
     .on_window_event(|window, event| {
+      // Settings window: hide instead of destroy on close so it reopens instantly.
+      if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        if window.label() == "settings" {
+          api.prevent_close();
+          window.hide().ok();
+          return;
+        }
+      }
+
       // Safety net: if a window is destroyed without going through its normal
       // close path (JS crash, Alt+F4, system kill), reset the corresponding
       // state flag so the app doesn't get permanently stuck.
