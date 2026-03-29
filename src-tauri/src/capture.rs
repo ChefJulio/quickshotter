@@ -65,8 +65,10 @@ pub fn get_desktop_bounds() -> Result<DesktopBounds, AppError> {
 /// On Windows, uses a single BitBlt of the full virtual desktop — much faster than
 /// per-monitor capture + stitch.
 pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
-  // Windows fast path: one BitBlt of the entire virtual desktop
-  #[cfg(target_os = "windows")]
+  // Fast path: single capture_region call for the full virtual desktop.
+  // On Windows this uses BitBlt, on macOS this uses CGWindowListCreateImage.
+  // Both are much faster than per-monitor xcap capture + stitch.
+  #[cfg(any(target_os = "windows", target_os = "macos"))]
   {
     let bounds = get_desktop_bounds()?;
     let img = capture_region(bounds.x, bounds.y, bounds.width, bounds.height)?;
@@ -79,7 +81,8 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
     });
   }
 
-  #[cfg(not(target_os = "windows"))]
+  // Fallback: xcap per-monitor capture + stitch (Linux, etc.)
+  #[cfg(not(any(target_os = "windows", target_os = "macos")))]
   {
   let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
   if monitors.is_empty() {
@@ -196,9 +199,9 @@ pub fn capture_monitor(index: usize) -> Result<ScreenCapture, AppError> {
   let w = m.width().map_err(|e| AppError::Capture(e.to_string()))?;
   let h = m.height().map_err(|e| AppError::Capture(e.to_string()))?;
 
-  #[cfg(target_os = "windows")]
+  #[cfg(any(target_os = "windows", target_os = "macos"))]
   let img = capture_region(x, y, w, h)?;
-  #[cfg(not(target_os = "windows"))]
+  #[cfg(not(any(target_os = "windows", target_os = "macos")))]
   let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
 
   Ok(ScreenCapture {
@@ -351,16 +354,110 @@ pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppEr
   }
 }
 
-/// Fallback for non-Windows: capture all monitors and crop.
-#[cfg(not(target_os = "windows"))]
+/// Capture a specific screen region via CGWindowListCreateImage.
+/// Captures exactly the requested rectangle from the compositor — no full-display
+/// capture + crop needed.
+#[cfg(target_os = "macos")]
 pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppError> {
-  let screen = capture_all_monitors()?;
-  let crop_x = (x - screen.origin_x).max(0) as u32;
-  let crop_y = (y - screen.origin_y).max(0) as u32;
-  image::imageops::crop_imm(&screen.image, crop_x, crop_y, w, h)
-    .to_image()
-    .try_into()
-    .map_err(|_| AppError::Capture("Crop failed".to_string()))
+  if w == 0 || h == 0 {
+    return Err(AppError::Capture("Region too small".to_string()));
+  }
+
+  #[repr(C)]
+  #[derive(Copy, Clone)]
+  struct CGRect { origin: CGPoint, size: CGSize }
+  #[repr(C)]
+  #[derive(Copy, Clone)]
+  struct CGPoint { x: f64, y: f64 }
+  #[repr(C)]
+  #[derive(Copy, Clone)]
+  struct CGSize { width: f64, height: f64 }
+
+  // CGWindowListOption flags
+  const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+  // CGWindowImageOption
+  const K_CG_WINDOW_IMAGE_DEFAULT: u32 = 0;
+  // kCGNullWindowID
+  const K_CG_NULL_WINDOW_ID: u32 = 0;
+
+  type CGImageRef = *const std::ffi::c_void;
+  type CFDataRef = *const std::ffi::c_void;
+
+  #[link(name = "CoreGraphics", kind = "framework")]
+  extern "C" {
+    fn CGWindowListCreateImage(
+      screenBounds: CGRect,
+      listOption: u32,
+      windowID: u32,
+      imageOption: u32,
+    ) -> CGImageRef;
+    fn CGImageGetWidth(image: CGImageRef) -> usize;
+    fn CGImageGetHeight(image: CGImageRef) -> usize;
+    fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
+    fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
+    fn CGImageGetDataProvider(image: CGImageRef) -> *const std::ffi::c_void;
+    fn CGDataProviderCopyData(provider: *const std::ffi::c_void) -> CFDataRef;
+    fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
+    fn CFDataGetLength(data: CFDataRef) -> isize;
+    fn CFRelease(cf: *const std::ffi::c_void);
+  }
+
+  unsafe {
+    let rect = CGRect {
+      origin: CGPoint { x: x as f64, y: y as f64 },
+      size: CGSize { width: w as f64, height: h as f64 },
+    };
+
+    let cg_image = CGWindowListCreateImage(
+      rect,
+      K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
+      K_CG_NULL_WINDOW_ID,
+      K_CG_WINDOW_IMAGE_DEFAULT,
+    );
+
+    if cg_image.is_null() {
+      return Err(AppError::Capture("CGWindowListCreateImage returned null (permission denied?)".to_string()));
+    }
+
+    let img_w = CGImageGetWidth(cg_image) as u32;
+    let img_h = CGImageGetHeight(cg_image) as u32;
+    let bpp = CGImageGetBitsPerPixel(cg_image);
+    let bytes_per_row = CGImageGetBytesPerRow(cg_image);
+
+    // Get raw pixel data
+    let provider = CGImageGetDataProvider(cg_image);
+    let data = CGDataProviderCopyData(provider);
+    if data.is_null() {
+      CFRelease(cg_image);
+      return Err(AppError::Capture("Failed to get pixel data from CGImage".to_string()));
+    }
+
+    let ptr = CFDataGetBytePtr(data);
+    let len = CFDataGetLength(data) as usize;
+
+    // CoreGraphics returns BGRA (or BGRX with premultiplied alpha).
+    // Convert to RGBA row by row (bytes_per_row may include padding).
+    let mut rgba = Vec::with_capacity((img_w * img_h * 4) as usize);
+    for row in 0..img_h as usize {
+      let row_start = row * bytes_per_row;
+      for col in 0..img_w as usize {
+        let px = row_start + col * (bpp / 8);
+        if px + 3 < len {
+          // BGRA -> RGBA
+          rgba.push(*ptr.add(px + 2)); // R
+          rgba.push(*ptr.add(px + 1)); // G
+          rgba.push(*ptr.add(px));     // B
+          rgba.push(*ptr.add(px + 3)); // A
+        }
+      }
+    }
+
+    CFRelease(data);
+    CFRelease(cg_image);
+
+    RgbaImage::from_raw(img_w, img_h, rgba)
+      .ok_or_else(|| AppError::Capture("Failed to create image from CGImage data".to_string()))
+  }
 }
 
 /// Convert RGBA image to RGB bytes without cloning the source image.
