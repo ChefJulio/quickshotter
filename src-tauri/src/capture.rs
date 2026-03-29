@@ -62,7 +62,25 @@ pub fn get_desktop_bounds() -> Result<DesktopBounds, AppError> {
 }
 
 /// Capture all monitors and stitch into a single image covering the virtual desktop.
+/// On Windows, uses a single BitBlt of the full virtual desktop — much faster than
+/// per-monitor capture + stitch.
 pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
+  // Windows fast path: one BitBlt of the entire virtual desktop
+  #[cfg(target_os = "windows")]
+  {
+    let bounds = get_desktop_bounds()?;
+    let img = capture_region(bounds.x, bounds.y, bounds.width, bounds.height)?;
+    return Ok(ScreenCapture {
+      width: img.width(),
+      height: img.height(),
+      origin_x: bounds.x,
+      origin_y: bounds.y,
+      image: img,
+    });
+  }
+
+  #[cfg(not(target_os = "windows"))]
+  {
   let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
   if monitors.is_empty() {
     return Err(AppError::Capture("No monitors found".to_string()));
@@ -165,15 +183,24 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
     width: total_w,
     height: total_h,
   })
+  } // #[cfg(not(target_os = "windows"))]
 }
 
 /// Capture a single monitor by index.
+/// Uses BitBlt on Windows for speed; falls back to xcap on other platforms.
 pub fn capture_monitor(index: usize) -> Result<ScreenCapture, AppError> {
   let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
   let m = monitors.get(index).ok_or_else(|| AppError::Capture(format!("Monitor index {} out of range", index)))?;
-  let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
   let x = m.x().map_err(|e| AppError::Capture(e.to_string()))?;
   let y = m.y().map_err(|e| AppError::Capture(e.to_string()))?;
+  let w = m.width().map_err(|e| AppError::Capture(e.to_string()))?;
+  let h = m.height().map_err(|e| AppError::Capture(e.to_string()))?;
+
+  #[cfg(target_os = "windows")]
+  let img = capture_region(x, y, w, h)?;
+  #[cfg(not(target_os = "windows"))]
+  let img = m.capture_image().map_err(|e| AppError::Capture(e.to_string()))?;
+
   Ok(ScreenCapture {
     width: img.width(),
     height: img.height(),
@@ -184,17 +211,17 @@ pub fn capture_monitor(index: usize) -> Result<ScreenCapture, AppError> {
 }
 
 /// Find which monitor the cursor is on and capture it.
+/// Uses BitBlt on Windows for speed.
 pub fn capture_monitor_at_cursor() -> Result<ScreenCapture, AppError> {
   let (cx, cy) = get_cursor_position()?;
   let monitors = Monitor::all().map_err(|e| AppError::Capture(e.to_string()))?;
-  // Find monitor containing cursor
   let index = monitors.iter().position(|m| {
     let Ok(mx) = m.x() else { return false };
     let Ok(my) = m.y() else { return false };
     let Ok(mw) = m.width() else { return false };
     let Ok(mh) = m.height() else { return false };
     cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32
-  }).unwrap_or(0); // fall back to primary if cursor not found on any
+  }).unwrap_or(0);
   capture_monitor(index)
 }
 

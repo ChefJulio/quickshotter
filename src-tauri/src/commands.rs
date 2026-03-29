@@ -501,11 +501,13 @@ async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto
     return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
   }
 
+  let t0 = std::time::Instant::now();
   let fullscreen_mode = app.state::<Mutex<AppState>>().lock_or_recover().config.fullscreen_mode.clone();
   let screen = match fullscreen_mode.as_str() {
     "current" => capture::capture_monitor_at_cursor()?,
     _ => capture::capture_all_monitors()?,
   };
+  eprintln!("[timing] fullscreen BitBlt ({}x{}, mode={}): {:?}", screen.width, screen.height, fullscreen_mode, t0.elapsed());
 
   // Fallback: detect blank screenshot in case permission check passed but
   // capture still returned empty (can happen after app updates on some macOS versions).
@@ -1004,16 +1006,16 @@ pub async fn complete_select_screen_capture(
   app: AppHandle,
   monitor_index: usize,
 ) -> Result<CaptureResultDto, AppError> {
-  // Hide overlay first
+  // Hide overlay first (webview path — daemon path already closed it)
   if let Some(overlay) = app.get_webview_window("overlay") {
     overlay.hide().ok();
   }
-  // Brief delay for overlay to hide
-  let _ = tauri::async_runtime::spawn_blocking(|| {
-    std::thread::sleep(std::time::Duration::from_millis(50));
-  }).await;
 
+  // No compositor sleep needed — daemon calls DwmFlush before sending result.
+  // capture_monitor uses BitBlt on Windows (fast).
+  let t0 = std::time::Instant::now();
   let screen = capture::capture_monitor(monitor_index)?;
+  eprintln!("[timing] monitor BitBlt ({}x{}): {:?}", screen.width, screen.height, t0.elapsed());
 
   // Close overlay
   overlay::close_overlay(&app);

@@ -96,7 +96,6 @@ impl WindowDetector {
       if screen_x >= w.x && screen_x < w.x + w.w
         && screen_y >= w.y && screen_y < w.y + w.h
       {
-        eprintln!("[window-detect] hit: '{}' at ({},{})-({}x{})", w.title, w.x, w.y, w.w, w.h);
         return Some(WindowRect {
           left: w.x,
           top: w.y,
