@@ -36,7 +36,8 @@ pub struct CaptureRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
-  Instant,
+  #[serde(alias = "instant")] // Accept old config value
+  Live,
   Freeze,
   Window,
   RecordRegion,
@@ -53,7 +54,7 @@ pub enum OverlayResult {
   #[serde(rename = "ready")]
   Ready,
 
-  /// Region selected (freeze, instant, ocr modes).
+  /// Region selected (freeze, live, ocr modes).
   /// Coordinates are physical screen pixels and can be negative
   /// (monitors left of / above the primary).
   Region {

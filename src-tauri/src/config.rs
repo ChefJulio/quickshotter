@@ -77,7 +77,7 @@ fn default_filename_suffix() -> String {
 }
 
 fn default_capture_mode() -> String {
-  "instant".to_string()
+  "live".to_string()
 }
 
 fn default_fullscreen_mode() -> String {
@@ -151,7 +151,7 @@ impl Default for AppConfig {
       filename_prefix: "screenshot".to_string(),
       save_to_disk: true,
       clipboard_action: default_clipboard_action(),
-      capture_mode: "instant".to_string(),
+      capture_mode: "live".to_string(),
       annotate_captures: false,
       annotate_shift_tool: default_shift_tool(),
       annotate_ctrl_tool: default_ctrl_tool(),
@@ -197,8 +197,14 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
   let path = config_path(app);
   if path.exists() {
     match fs::read_to_string(&path) {
-      Ok(content) => match serde_json::from_str(&content) {
-        Ok(config) => return config,
+      Ok(content) => match serde_json::from_str::<AppConfig>(&content) {
+        Ok(mut config) => {
+          // Migrate old "instant" -> "live"
+          if config.capture_mode == "instant" {
+            config.capture_mode = "live".to_string();
+          }
+          return config;
+        }
         Err(e) => eprintln!("Failed to parse config: {e}"),
       },
       Err(e) => eprintln!("Failed to read config: {e}"),

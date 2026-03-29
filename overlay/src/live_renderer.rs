@@ -36,6 +36,19 @@ pub struct LiveRenderer {
   border_pixel: u32,
   mode: CaptureMode,
   prev_dirty: Option<(i32, i32, i32, i32)>,
+  /// Cached DIB section handle + pointer — avoids CreateDIBSection per frame.
+  #[cfg(target_os = "windows")]
+  dib_cache: Option<DibCache>,
+  /// Track whether buffer changed since last blit.
+  dirty: bool,
+}
+
+#[cfg(target_os = "windows")]
+struct DibCache {
+  hdc: windows::Win32::Graphics::Gdi::HDC,
+  dib: windows::Win32::Graphics::Gdi::HGDIOBJ,
+  bits: *mut u8,
+  byte_count: usize,
 }
 
 impl LiveRenderer {
@@ -47,25 +60,37 @@ impl LiveRenderer {
     let highlight_pixel = bgra(0, 0, 0, 1);
     let border_pixel = bgra(0xff, 0xaa, 0x00, 0xff); // #00aaff
 
+    // Allocate + fill in one step (avoids zeroing then overwriting)
     let buffer = vec![dark_pixel; pixel_count];
 
     let mut renderer = Self {
       width, height, hwnd, buffer,
       dark_pixel, clear_pixel, highlight_pixel, border_pixel, mode,
       prev_dirty: None,
+      #[cfg(target_os = "windows")]
+      dib_cache: None,
+      dirty: true,
     };
 
+    #[cfg(target_os = "windows")]
+    renderer.init_dib_cache();
+
+    // Initial blit to make the overlay visible
     renderer.blit_to_window();
     renderer
   }
 
   pub fn render(&mut self, interaction: &Interaction) {
+    self.dirty = false;
     match self.mode {
       CaptureMode::Window => self.render_window_mode(interaction),
       CaptureMode::SelectScreen => self.render_select_screen_mode(interaction),
       _ => self.render_region_mode(interaction),
     }
-    self.blit_to_window();
+    // Only blit if buffer actually changed
+    if self.dirty {
+      self.blit_to_window();
+    }
   }
 
   // ── Region mode ──────────────────────────────────────
@@ -166,6 +191,8 @@ impl LiveRenderer {
     let y1 = y1.max(0) as usize;
     let x2 = x2.min(w) as usize;
     let y2 = y2.min(h) as usize;
+    if x1 >= x2 || y1 >= y2 { return; }
+    self.dirty = true;
     let stride = self.width as usize;
 
     for y in y1..y2 {
@@ -185,10 +212,10 @@ impl LiveRenderer {
     self.fill_rect(x2 - bw, y1 + bw, x2, y2 - bw, pixel); // right
   }
 
+  /// Create and cache the DIB section + memory DC once, reused every frame.
   #[cfg(target_os = "windows")]
-  fn blit_to_window(&self) {
+  fn init_dib_cache(&mut self) {
     unsafe {
-      let hwnd = HWND(self.hwnd as *mut _);
       let hdc_mem = CreateCompatibleDC(None);
       if hdc_mem.0.is_null() { return; }
 
@@ -211,38 +238,66 @@ impl LiveRenderer {
       );
 
       if let Ok(dib) = dib {
-        let byte_count = self.buffer.len() * 4;
-        std::ptr::copy_nonoverlapping(
-          self.buffer.as_ptr() as *const u8,
-          bits_ptr as *mut u8,
-          byte_count,
-        );
-
-        let old = SelectObject(hdc_mem, dib.into());
-
-        let size = SIZE { cx: self.width as i32, cy: self.height as i32 };
-        let src_point = POINT { x: 0, y: 0 };
-        let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
-          BlendOp: 0,
-          BlendFlags: 0,
-          SourceConstantAlpha: 255,
-          AlphaFormat: 1,
-        };
-
-        let _ = UpdateLayeredWindow(
-          hwnd, None, None, Some(&size),
-          Some(hdc_mem), Some(&src_point),
-          Default::default(), Some(&blend), ULW_ALPHA,
-        );
-
-        SelectObject(hdc_mem, old);
-        let _ = DeleteObject(dib.into());
+        let dib_obj = SelectObject(hdc_mem, dib.into());
+        // Keep the old object around so we can restore before cleanup
+        let _ = dib_obj;
+        self.dib_cache = Some(DibCache {
+          hdc: hdc_mem,
+          dib: dib.into(),
+          bits: bits_ptr as *mut u8,
+          byte_count: self.buffer.len() * 4,
+        });
+      } else {
+        let _ = DeleteDC(hdc_mem);
       }
+    }
+  }
 
-      let _ = DeleteDC(hdc_mem);
+  #[cfg(target_os = "windows")]
+  fn blit_to_window(&self) {
+    let cache = match &self.dib_cache {
+      Some(c) => c,
+      None => return,
+    };
+
+    unsafe {
+      // Copy only the buffer to the pre-allocated DIB
+      std::ptr::copy_nonoverlapping(
+        self.buffer.as_ptr() as *const u8,
+        cache.bits,
+        cache.byte_count,
+      );
+
+      let hwnd = HWND(self.hwnd as *mut _);
+      let size = SIZE { cx: self.width as i32, cy: self.height as i32 };
+      let src_point = POINT { x: 0, y: 0 };
+      let blend = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
+        BlendOp: 0,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: 1,
+      };
+
+      let _ = UpdateLayeredWindow(
+        hwnd, None, None, Some(&size),
+        Some(cache.hdc), Some(&src_point),
+        Default::default(), Some(&blend), ULW_ALPHA,
+      );
     }
   }
 
   #[cfg(not(target_os = "windows"))]
   fn blit_to_window(&self) {}
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for LiveRenderer {
+  fn drop(&mut self) {
+    if let Some(cache) = self.dib_cache.take() {
+      unsafe {
+        let _ = DeleteDC(cache.hdc);
+        let _ = DeleteObject(cache.dib);
+      }
+    }
+  }
 }

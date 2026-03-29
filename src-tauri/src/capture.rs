@@ -265,6 +265,77 @@ fn get_cursor_position() -> Result<(i32, i32), AppError> {
 }
 
 
+/// Capture a specific screen region directly via Win32 BitBlt.
+/// Much faster than capturing the full desktop and cropping — only reads
+/// the exact pixels needed.
+#[cfg(target_os = "windows")]
+pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppError> {
+  use windows::Win32::Graphics::Gdi::{
+    CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    GetDC, GetDIBits, ReleaseDC, SelectObject, BitBlt,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+  };
+
+  if w == 0 || h == 0 {
+    return Err(AppError::Capture("Region too small".to_string()));
+  }
+
+  unsafe {
+    let hdc_screen = GetDC(None);
+    let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+    let hbm = CreateCompatibleBitmap(hdc_screen, w as i32, h as i32);
+    let old = SelectObject(hdc_mem, hbm.into());
+
+    BitBlt(hdc_mem, 0, 0, w as i32, h as i32, Some(hdc_screen), x, y, SRCCOPY)
+      .map_err(|e| AppError::Capture(format!("BitBlt failed: {e}")))?;
+
+    // Read pixels as BGRA
+    let mut bmi = BITMAPINFO {
+      bmiHeader: BITMAPINFOHEADER {
+        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+        biWidth: w as i32,
+        biHeight: -(h as i32), // top-down
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: BI_RGB.0,
+        ..Default::default()
+      },
+      bmiColors: [Default::default()],
+    };
+
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    GetDIBits(
+      hdc_mem, hbm, 0, h, Some(buf.as_mut_ptr() as *mut _),
+      &mut bmi, DIB_RGB_COLORS,
+    );
+
+    // BGRA -> RGBA
+    for pixel in buf.chunks_exact_mut(4) {
+      pixel.swap(0, 2);
+    }
+
+    SelectObject(hdc_mem, old);
+    let _ = DeleteObject(hbm.into());
+    let _ = DeleteDC(hdc_mem);
+    let _ = ReleaseDC(None, hdc_screen);
+
+    RgbaImage::from_raw(w, h, buf)
+      .ok_or_else(|| AppError::Capture("Failed to create image from BitBlt data".to_string()))
+  }
+}
+
+/// Fallback for non-Windows: capture all monitors and crop.
+#[cfg(not(target_os = "windows"))]
+pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppError> {
+  let screen = capture_all_monitors()?;
+  let crop_x = (x - screen.origin_x).max(0) as u32;
+  let crop_y = (y - screen.origin_y).max(0) as u32;
+  image::imageops::crop_imm(&screen.image, crop_x, crop_y, w, h)
+    .to_image()
+    .try_into()
+    .map_err(|_| AppError::Capture("Crop failed".to_string()))
+}
+
 /// Convert RGBA image to RGB bytes without cloning the source image.
 /// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
 pub fn rgba_to_rgb_pub(img: &RgbaImage) -> Result<image::RgbImage, AppError> {

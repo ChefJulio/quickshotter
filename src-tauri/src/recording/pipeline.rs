@@ -388,16 +388,20 @@ fn capture_loop_multi(
                         ov.monitor_idx, img.width(), img.height(),
                         ov.src_x, ov.src_y, ov.src_w, ov.src_h, ov.dst_x, ov.dst_y);
                 }
-                // Copy overlap strip from monitor image to canvas
+                // Copy overlap strip from monitor image to canvas (row-wise bulk copy)
                 let sw = ov.src_w.min(img.width().saturating_sub(ov.src_x));
                 let sh = ov.src_h.min(img.height().saturating_sub(ov.src_y));
-                for py in 0..sh.min(out_h.saturating_sub(ov.dst_y)) {
-                    for px in 0..sw.min(out_w.saturating_sub(ov.dst_x)) {
-                        canvas.put_pixel(
-                            ov.dst_x + px, ov.dst_y + py,
-                            *img.get_pixel(ov.src_x + px, ov.src_y + py),
-                        );
-                    }
+                let copy_h = sh.min(out_h.saturating_sub(ov.dst_y));
+                let copy_w = sw.min(out_w.saturating_sub(ov.dst_x));
+                let src_stride = img.width() as usize * 4;
+                let dst_stride = out_w as usize * 4;
+                let src_buf = img.as_raw();
+                let dst_buf = canvas.as_mut();
+                for py in 0..copy_h {
+                    let src_off = (ov.src_y + py) as usize * src_stride + ov.src_x as usize * 4;
+                    let dst_off = (ov.dst_y + py) as usize * dst_stride + ov.dst_x as usize * 4;
+                    let len = copy_w as usize * 4;
+                    dst_buf[dst_off..dst_off + len].copy_from_slice(&src_buf[src_off..src_off + len]);
                 }
             }
             if !logged_first_frame {
@@ -415,10 +419,17 @@ fn capture_loop_multi(
                 };
                 let ox = (info.x - desk_x) as u32;
                 let oy = (info.y - desk_y) as u32;
-                for py in 0..img.height().min(out_h.saturating_sub(oy)) {
-                    for px in 0..img.width().min(out_w.saturating_sub(ox)) {
-                        canvas.put_pixel(ox + px, oy + py, *img.get_pixel(px, py));
-                    }
+                let copy_h = img.height().min(out_h.saturating_sub(oy));
+                let copy_w = img.width().min(out_w.saturating_sub(ox));
+                let src_stride = img.width() as usize * 4;
+                let dst_stride = out_w as usize * 4;
+                let src_buf = img.as_raw();
+                let dst_buf = canvas.as_mut();
+                for py in 0..copy_h {
+                    let src_off = py as usize * src_stride;
+                    let dst_off = (oy + py) as usize * dst_stride + ox as usize * 4;
+                    let len = copy_w as usize * 4;
+                    dst_buf[dst_off..dst_off + len].copy_from_slice(&src_buf[src_off..src_off + len]);
                 }
             }
             if !ok { continue; }

@@ -16,10 +16,9 @@ pub struct AppState {
   pub is_annotating: bool,
   // Only used in "freeze" / "window" capture modes
   pub pending_screenshot: Option<RgbaImage>,
-  pub pending_base64: Option<String>,
   // Last saved file, used for notification click -> reveal in explorer
   pub last_saved_path: Option<PathBuf>,
-  // Overlay mode: "instant", "freeze", or "window"
+  // Overlay mode: "live", "freeze", or "window"
   pub overlay_mode: String,
   // Desktop bounds cached when overlay opens (avoids re-enumerating monitors)
   pub cached_bounds: Option<(i32, i32, u32, u32)>,
@@ -49,9 +48,8 @@ impl AppState {
       is_capturing: false,
       is_annotating: false,
       pending_screenshot: None,
-      pending_base64: None,
       last_saved_path: None,
-      overlay_mode: "instant".to_string(),
+      overlay_mode: "live".to_string(),
       cached_bounds: None,
       overlay_window_id: 0,
       pending_annotation: None,

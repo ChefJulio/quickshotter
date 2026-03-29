@@ -55,6 +55,9 @@ fn ensure_worker() {
           if active {
             let result = find_window_at(x, y, exclude);
             state.lock().unwrap().result = result;
+            // Window::all() itself takes 5-500ms depending on OS.
+            // Sleep between polls to avoid pinning a CPU core.
+            std::thread::sleep(std::time::Duration::from_millis(30));
           } else {
             // Sleep longer when inactive to avoid wasting CPU
             std::thread::sleep(std::time::Duration::from_millis(100));

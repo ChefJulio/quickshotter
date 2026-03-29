@@ -1,5 +1,4 @@
-use image::RgbaImage;
-use std::io::Write;
+use image::{ImageEncoder, RgbaImage};
 use crate::error::AppError;
 
 const CATBOX_URL: &str = "https://catbox.moe/user/api.php";
@@ -7,25 +6,24 @@ const CATBOX_URL: &str = "https://catbox.moe/user/api.php";
 /// Upload an RgbaImage to catbox.moe and return the file URL.
 /// Shells out to curl, which handles multipart encoding reliably.
 pub async fn upload(img: &RgbaImage) -> Result<String, AppError> {
-  // Encode image to PNG in a temp file
+  // Encode image directly to temp file (no intermediate memory buffer)
   let temp_dir = std::env::temp_dir();
   let temp_path = temp_dir.join("quickshotter_upload.png");
 
-  let mut file = std::fs::File::create(&temp_path)
-    .map_err(|e| AppError::Upload(format!("Failed to create temp file: {e}")))?;
-
-  let mut buf = std::io::Cursor::new(Vec::new());
-  img.write_to(&mut buf, image::ImageFormat::Png)
-    .map_err(|e| AppError::Upload(format!("Failed to encode PNG: {e}")))?;
-  let png_bytes = buf.into_inner();
-
-  if png_bytes.is_empty() {
-    return Err(AppError::Upload("PNG encoding produced empty output".to_string()));
+  {
+    let file = std::fs::File::create(&temp_path)
+      .map_err(|e| AppError::Upload(format!("Failed to create temp file: {e}")))?;
+    let writer = std::io::BufWriter::new(file);
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+      writer,
+      image::codecs::png::CompressionType::Fast,
+      image::codecs::png::FilterType::Sub,
+    );
+    encoder.write_image(
+      img.as_raw(), img.width(), img.height(),
+      image::ExtendedColorType::Rgba8,
+    ).map_err(|e| AppError::Upload(format!("Failed to encode PNG: {e}")))?;
   }
-
-  file.write_all(&png_bytes)
-    .map_err(|e| AppError::Upload(format!("Failed to write temp file: {e}")))?;
-  drop(file);
 
   // Shell out to curl for the multipart upload
   let temp_str = temp_path.to_string_lossy().to_string();

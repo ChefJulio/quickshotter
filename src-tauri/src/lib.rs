@@ -77,7 +77,6 @@ pub fn run() {
       commands::cancel_capture,
       commands::get_overlay_mode,
       commands::get_overlay_origin,
-      commands::get_pending_screenshot,
       commands::get_config,
       commands::save_config,
       commands::get_default_config,
@@ -128,6 +127,12 @@ pub fn run() {
         });
       }
 
+      // Pre-cache desktop bounds so the first capture doesn't call Monitor::all()
+      if let Ok(b) = capture::get_desktop_bounds() {
+        app.state::<Mutex<state::AppState>>().lock_or_recover().cached_bounds =
+          Some((b.x, b.y, b.width, b.height));
+      }
+
       // Spawn overlay daemon to pre-warm the GPU. This happens in the background
       // so it doesn't block app startup. The daemon will be ready before the user
       // presses their first hotkey.
@@ -162,7 +167,7 @@ pub fn run() {
           let mut state = s.lock_or_recover();
           state.is_capturing = false;
           state.pending_screenshot = None;
-          state.pending_base64 = None;
+
           state.overlay_window_id = 0;
         } else if label == "annotation" {
           let mut state = s.lock_or_recover();

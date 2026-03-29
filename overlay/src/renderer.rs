@@ -18,6 +18,8 @@ pub struct FreezeRenderer {
   pub uniform_buf: wgpu::Buffer,
   pub viewport_w: f32,
   pub viewport_h: f32,
+  /// Cached selection to skip GPU work when nothing changed.
+  last_selection: Option<(f32, f32, f32, f32)>,
 }
 
 impl FreezeRenderer {
@@ -164,13 +166,23 @@ impl FreezeRenderer {
       uniform_buf,
       viewport_w,
       viewport_h,
+      last_selection: None,
     })
   }
 
   /// Render one frame with current interaction state.
-  pub fn render(&self, gpu: &GpuContext, interaction: &Interaction) {
+  /// Skips GPU work entirely when the selection hasn't changed.
+  pub fn render(&mut self, gpu: &GpuContext, interaction: &Interaction) {
+    let current_sel = interaction.selection();
+
+    // Skip if selection hasn't changed since last frame
+    if current_sel == self.last_selection {
+      return;
+    }
+    self.last_selection = current_sel;
+
     let mut uniforms = Uniforms::new(self.viewport_w, self.viewport_h, true, 0.45);
-    if let Some((x1, y1, x2, y2)) = interaction.selection() {
+    if let Some((x1, y1, x2, y2)) = current_sel {
       uniforms.sel_min = [x1, y1];
       uniforms.sel_max = [x2, y2];
     }

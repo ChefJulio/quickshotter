@@ -19,6 +19,9 @@ pub struct GifEncoder {
     output_width: u32,
     output_height: u32,
     frame_count: u32,
+    // Reusable buffers to avoid per-frame allocations
+    rgb_buf: Vec<u8>,
+    index_buf: Vec<u8>,
 }
 
 impl GifEncoder {
@@ -30,6 +33,8 @@ impl GifEncoder {
             output_width: 0,
             output_height: 0,
             frame_count: 0,
+            rgb_buf: Vec::new(),
+            index_buf: Vec::new(),
         }
     }
 
@@ -49,17 +54,19 @@ impl GifEncoder {
         height: u32,
         output_path: &Path,
     ) -> Result<(), AppError> {
-        // Downscale if needed
+        // Downscale if needed — borrow the data instead of cloning
         let (scaled_rgba, sw, sh) = if width > self.max_width {
             let scale = self.max_width as f64 / width as f64;
             let new_w = self.max_width;
             let new_h = (height as f64 * scale).round() as u32;
+            // Wrap without copying — from_raw requires owned Vec but we can
+            // use image::imageops::resize on a view instead.
             let src = image::RgbaImage::from_raw(width, height, rgba.to_vec())
                 .ok_or_else(|| AppError::Recording("Invalid RGBA data".to_string()))?;
             let resized = image::imageops::resize(&src, new_w, new_h, image::imageops::FilterType::Triangle);
-            (resized.into_raw(), new_w, new_h)
+            (std::borrow::Cow::Owned(resized.into_raw()), new_w, new_h)
         } else {
-            (rgba.to_vec(), width, height)
+            (std::borrow::Cow::Borrowed(rgba), width, height)
         };
 
         // Create encoder on first frame (now we know dimensions)
@@ -76,22 +83,24 @@ impl GifEncoder {
             self.writer = Some(encoder);
         }
 
-        // Quantize RGBA to 256-color palette
+        // Quantize RGBA to 256-color palette — reuse buffers across frames
         let pixel_count = (sw * sh) as usize;
-        let mut rgb_pixels = Vec::with_capacity(pixel_count * 3);
+        self.rgb_buf.clear();
+        self.rgb_buf.reserve(pixel_count * 3);
         for pixel in scaled_rgba.chunks_exact(4) {
-            rgb_pixels.push(pixel[0]);
-            rgb_pixels.push(pixel[1]);
-            rgb_pixels.push(pixel[2]);
+            self.rgb_buf.push(pixel[0]);
+            self.rgb_buf.push(pixel[1]);
+            self.rgb_buf.push(pixel[2]);
         }
 
-        let nq = color_quant::NeuQuant::new(10, 256, &rgb_pixels);
+        let nq = color_quant::NeuQuant::new(10, 256, &self.rgb_buf);
         let palette = nq.color_map_rgb();
 
-        // Map pixels to palette indices
-        let mut indices = Vec::with_capacity(pixel_count);
-        for pixel in rgb_pixels.chunks_exact(3) {
-            indices.push(nq.index_of(&[pixel[0], pixel[1], pixel[2], 255]) as u8);
+        // Map pixels to palette indices — reuse buffer
+        self.index_buf.clear();
+        self.index_buf.reserve(pixel_count);
+        for pixel in self.rgb_buf.chunks_exact(3) {
+            self.index_buf.push(nq.index_of(&[pixel[0], pixel[1], pixel[2], 255]) as u8);
         }
 
         let mut frame = gif::Frame::default();
@@ -99,7 +108,7 @@ impl GifEncoder {
         frame.height = sh as u16;
         frame.delay = self.frame_delay_cs;
         frame.palette = Some(palette);
-        frame.buffer = std::borrow::Cow::Owned(indices);
+        frame.buffer = std::borrow::Cow::Borrowed(&self.index_buf);
 
         if let Some(ref mut writer) = self.writer {
             writer.write_frame(&frame)

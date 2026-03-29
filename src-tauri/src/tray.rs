@@ -201,8 +201,17 @@ pub fn refresh_tray_menu(app: &AppHandle) {
   let (history, config) = {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
+    // Clone only what build_tray_menu needs (5 hotkey strings + history paths)
     let history: Vec<PathBuf> = state.capture_history.iter().cloned().collect();
-    (history, state.config.clone())
+    let config = crate::config::AppConfig {
+      hotkey_region: state.config.hotkey_region.clone(),
+      hotkey_window: state.config.hotkey_window.clone(),
+      hotkey_fullscreen: state.config.hotkey_fullscreen.clone(),
+      hotkey_ocr: state.config.hotkey_ocr.clone(),
+      hotkey_record: state.config.hotkey_record.clone(),
+      ..Default::default()
+    };
+    (history, config)
   };
   if let Ok(menu) = build_tray_menu(app, &history, &config) {
     if let Some(tray) = app.tray_by_id("main") {

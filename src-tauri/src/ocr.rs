@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use image::RgbaImage;
 
 use crate::error::AppError;
@@ -12,16 +13,17 @@ pub fn recognize_text(img: &RgbaImage) -> Result<String, AppError> {
 
 /// Upscale image 2x if either dimension is under 256px.
 /// Uses nearest-neighbor to keep text sharp.
-fn upscale_if_needed(img: &RgbaImage) -> RgbaImage {
+/// Returns Cow to avoid cloning when no upscale is needed (the common case).
+fn upscale_if_needed(img: &RgbaImage) -> Cow<'_, RgbaImage> {
   if img.width() < 256 || img.height() < 256 {
-    image::imageops::resize(
+    Cow::Owned(image::imageops::resize(
       img,
       img.width() * 2,
       img.height() * 2,
       image::imageops::FilterType::Nearest,
-    )
+    ))
   } else {
-    img.clone()
+    Cow::Borrowed(img)
   }
 }
 

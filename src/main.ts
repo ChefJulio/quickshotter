@@ -278,7 +278,7 @@ function updateDelayState() {
   captureDelaySelect.disabled = isFreeze;
   if (isFreeze) {
     captureDelaySelect.value = '0';
-    captureDelaySelect.title = 'Delay is only available in Instant capture mode';
+    captureDelaySelect.title = 'Delay is only available in Live capture mode';
   } else {
     captureDelaySelect.title = '';
   }

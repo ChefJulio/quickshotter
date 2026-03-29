@@ -147,6 +147,8 @@ impl OverlayApp {
   }
 
   fn start_capture(&mut self, event_loop: &ActiveEventLoop, req: CaptureRequest) {
+    let t0 = std::time::Instant::now();
+
     if matches!(self.state, AppState::Active { .. }) {
       self.cancel_capture();
     }
@@ -165,6 +167,7 @@ impl OverlayApp {
         return;
       }
     };
+    eprintln!("[overlay-daemon] window created in {:?}", t0.elapsed());
 
     let renderer = if mode == CaptureMode::Freeze {
       let screenshot_data = req.image.as_ref().and_then(|path| {
@@ -233,6 +236,7 @@ impl OverlayApp {
       interaction.set_monitors(monitors);
     }
 
+    eprintln!("[overlay-daemon] renderer ready in {:?}", t0.elapsed());
     eprintln!("[overlay-daemon] capture active ({:?})", mode);
 
     self.state = AppState::Active {
@@ -246,6 +250,16 @@ impl OverlayApp {
       #[cfg(target_os = "windows")]
       highlight: highlight_border,
     };
+
+    // Freeze mode: render first frame then show window (no white flash).
+    // Live modes are already visible — layered windows need it for events.
+    if mode == CaptureMode::Freeze {
+      self.render_frame();
+      if let AppState::Active { window, .. } = &self.state {
+        window.set_visible(true);
+        window.request_redraw();
+      }
+    }
   }
 
   fn cancel_capture(&mut self) {
@@ -292,11 +306,19 @@ impl OverlayApp {
     };
 
     if let Some(result) = result {
+      eprintln!("[overlay-daemon] selection complete, destroying window");
       self.state = AppState::Idle;
-      // Brief pause for DWM to composite the window destruction (~2 vsync frames).
-      // The overlay window is already dropped at this point.
-      std::thread::sleep(std::time::Duration::from_millis(34));
-      eprintln!("[overlay-daemon] result: {result:?}");
+      // Wait for DWM to finish compositing the window destruction.
+      // DwmFlush blocks until the next composition cycle completes (~6-16ms
+      // depending on refresh rate). This is a guarantee, not a guess.
+      #[cfg(target_os = "windows")]
+      {
+        use windows::Win32::Graphics::Dwm::DwmFlush;
+        unsafe { let _ = DwmFlush(); }
+      }
+      #[cfg(not(target_os = "windows"))]
+      std::thread::sleep(std::time::Duration::from_millis(16));
+      eprintln!("[overlay-daemon] DWM flushed, sending result to host");
       result.send();
     }
   }

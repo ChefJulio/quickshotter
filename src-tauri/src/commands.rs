@@ -30,7 +30,7 @@ pub struct AnnotationConfigDto {
   pub right_alt_tool: String,
 }
 
-/// Returns "instant", "freeze", or "window" so the overlay JS knows which mode.
+/// Returns "live", "freeze", or "window" so the overlay JS knows which mode.
 #[tauri::command]
 pub fn get_capture_delay(app: AppHandle) -> u32 {
   app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay
@@ -47,17 +47,6 @@ pub fn get_overlay_mode(app: AppHandle) -> String {
 pub fn get_overlay_origin() -> Result<(i32, i32), AppError> {
   let bounds = capture::get_desktop_bounds()?;
   Ok((bounds.x, bounds.y))
-}
-
-/// In freeze/window mode, the overlay pulls the pre-captured screenshot.
-/// Takes ownership of the base64 data (drops it from state) to free memory
-/// since the overlay only needs it once.
-#[tauri::command]
-pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
-  app.state::<Mutex<AppState>>().lock_or_recover()
-    .pending_base64
-    .take()
-    .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
 }
 
 // -- Shared capture finalization --
@@ -80,9 +69,11 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
   }
 
   // Clipboard copy is synchronous — user needs to paste immediately.
+  let t_fin = std::time::Instant::now();
   let clipboard_action = config.clipboard_action.clone();
   let copied = if clipboard_action == "image" {
     capture::copy_to_clipboard(img)?;
+    eprintln!("[timing] clipboard copy ({}x{}): {:?}", img.width(), img.height(), t_fin.elapsed());
     true
   } else {
     false
@@ -112,8 +103,11 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
   std::thread::spawn(move || {
     // Save to disk
     if let Some(ref path) = filepath_bg {
+      let t_save = std::time::Instant::now();
       if let Err(e) = capture::write_image_to_path(&img_bg, path, &config) {
         eprintln!("Background save failed: {e}");
+      } else {
+        eprintln!("[timing] disk save ({} format): {:?}", config.format, t_save.elapsed());
       }
     }
 
@@ -573,6 +567,8 @@ async fn complete_region_capture_inner(
   force_annotate: bool,
   toggle_save: bool,
 ) -> Result<CaptureResultDto, AppError> {
+  let t0 = std::time::Instant::now();
+
   let left = x1.min(x2);
   let top = y1.min(y2);
   let right = x1.max(x2);
@@ -596,7 +592,9 @@ async fn complete_region_capture_inner(
       .pending_screenshot
       .as_ref()
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
-    safe_crop(screenshot, left, top, w, h)?
+    let img = safe_crop(screenshot, left, top, w, h)?;
+    eprintln!("[timing] crop from pending: {:?}", t0.elapsed());
+    img
   } else {
     // Wait for overlay to de-render before capturing. The native overlay daemon
     // already waits 34ms before sending its result, so this only needs to cover
@@ -605,9 +603,15 @@ async fn complete_region_capture_inner(
     let _ = tauri::async_runtime::spawn_blocking(|| {
       std::thread::sleep(std::time::Duration::from_millis(50));
     }).await;
-    let screen = capture::capture_all_monitors()?;
-    safe_crop(&screen.image, left, top, w, h)?
+    eprintln!("[timing] compositor wait: {:?}", t0.elapsed());
+    // Capture just the selected region via BitBlt — much faster than
+    // capturing the full desktop and cropping.
+    let img = capture::capture_region(left as i32, top as i32, w, h)?;
+    eprintln!("[timing] region capture: {:?}", t0.elapsed());
+    img
   };
+
+  eprintln!("[timing] image ready ({}x{}): {:?}", image.width(), image.height(), t0.elapsed());
 
   // Check if we should open annotation editor (config setting or shift-key override)
   let annotate = force_annotate
@@ -617,7 +621,9 @@ async fn complete_region_capture_inner(
     return open_annotation_for_image(app, image).await;
   }
 
-  finalize_capture_with_toggle(app, &image, toggle_save)
+  let result = finalize_capture_with_toggle(app, &image, toggle_save);
+  eprintln!("[timing] finalize done: {:?}", t0.elapsed());
+  result
 }
 
 // -- Native overlay dispatch (called from overlay daemon result handler) --
@@ -629,24 +635,68 @@ pub async fn complete_region_capture_from_overlay(
   x1: i32, y1: i32, x2: i32, y2: i32,
   shift: bool, alt: bool,
 ) -> Result<CaptureResultDto, AppError> {
-  // Use cached bounds from overlay open (avoids re-enumerating monitors)
-  let (bx, by) = {
-    let s = app.state::<Mutex<AppState>>();
-    let state = s.lock_or_recover();
-    match state.cached_bounds {
-      Some((x, y, _, _)) => (x, y),
-      None => {
-        drop(state);
-        let b = capture::get_desktop_bounds()?;
-        (b.x, b.y)
+  let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
+
+  if has_pending {
+    // Freeze mode: crop from pre-captured image using image-space coords
+    let (bx, by) = {
+      let s = app.state::<Mutex<AppState>>();
+      let state = s.lock_or_recover();
+      match state.cached_bounds {
+        Some((x, y, _, _)) => (x, y),
+        None => {
+          drop(state);
+          let b = capture::get_desktop_bounds()?;
+          (b.x, b.y)
+        }
       }
-    }
-  };
-  let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
-  let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
-  let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
-  let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
-  complete_region_capture_inner(app, img_x1, img_y1, img_x2, img_y2, shift, alt).await
+    };
+    let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
+    let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
+    let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
+    let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
+    complete_region_capture_inner(app, img_x1, img_y1, img_x2, img_y2, shift, alt).await
+  } else {
+    // Live mode: use screen coords directly — capture_region uses BitBlt
+    // which operates in screen space. Pass raw screen coords as-is.
+    let sx = x1.min(x2);
+    let sy = y1.min(y2);
+    let sw = (x1.max(x2) - sx) as u32;
+    let sh = (y1.max(y2) - sy) as u32;
+    complete_region_capture_live(app, sx, sy, sw, sh, shift, alt).await
+  }
+}
+
+/// Live mode region capture — uses BitBlt to capture just the selected region.
+/// Screen coords are absolute (from daemon). No full-desktop capture needed.
+async fn complete_region_capture_live(
+  app: &AppHandle,
+  screen_x: i32, screen_y: i32, w: u32, h: u32,
+  force_annotate: bool, toggle_save: bool,
+) -> Result<CaptureResultDto, AppError> {
+  let t0 = std::time::Instant::now();
+
+  if w < 3 || h < 3 {
+    return Err(AppError::Capture("Selection too small".to_string()));
+  }
+
+  // No compositor wait needed — the daemon called DwmFlush() before sending
+  // the result, guaranteeing the overlay window is fully removed.
+
+  // Capture just the selected region via BitBlt
+  let image = capture::capture_region(screen_x, screen_y, w, h)?;
+  eprintln!("[timing] region BitBlt ({}x{}): {:?}", w, h, t0.elapsed());
+
+  let annotate = force_annotate
+    || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
+
+  if annotate {
+    return open_annotation_for_image(app, image).await;
+  }
+
+  let result = finalize_capture_with_toggle(app, &image, toggle_save);
+  eprintln!("[timing] finalize done: {:?}", t0.elapsed());
+  result
 }
 
 /// Called by the native overlay daemon when a window is selected.
@@ -655,6 +705,15 @@ pub async fn complete_window_capture_from_overlay(
   left: i32, top: i32, right: i32, bottom: i32,
   shift: bool, alt: bool,
 ) -> Result<CaptureResultDto, AppError> {
+  let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
+
+  if !has_pending {
+    // Live mode: BitBlt the window bounds directly
+    let w = (right - left).max(0) as u32;
+    let h = (bottom - top).max(0) as u32;
+    return complete_region_capture_live(app, left, top, w, h, shift, alt).await;
+  }
+
   complete_window_capture_inner(app, left, top, right, bottom, shift, alt).await
 }
 
@@ -679,6 +738,14 @@ pub async fn complete_ocr_capture(
   tauri::async_runtime::spawn(async move { overlay::close_overlay(&app2); });
 
   result
+}
+
+/// Called by the native overlay daemon when OCR region is selected.
+pub async fn complete_ocr_capture_from_overlay(
+  app: &AppHandle,
+  x1: u32, y1: u32, x2: u32, y2: u32,
+) -> Result<String, AppError> {
+  complete_ocr_capture_inner(app, x1, y1, x2, y2).await
 }
 
 async fn complete_ocr_capture_inner(
@@ -1226,7 +1293,7 @@ pub async fn save_config(
 
   // Validate capture_mode
   match new_config.capture_mode.as_str() {
-    "instant" | "freeze" => {}
+    "live" | "freeze" | "instant" => {}
     other => return Err(AppError::Config(format!("Invalid capture mode: {other}"))),
   }
 

@@ -70,7 +70,8 @@ impl WindowDetector {
             thread_state.lock().unwrap().windows = infos;
           }
 
-          std::thread::sleep(std::time::Duration::from_millis(16));
+          // 50ms is plenty — windows don't rearrange faster than this
+          std::thread::sleep(std::time::Duration::from_millis(50));
         }
       })
       .expect("failed to spawn window detection thread");

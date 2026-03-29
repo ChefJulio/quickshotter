@@ -22,8 +22,13 @@ pub fn create_overlay_window(
   // Freeze mode: opaque window (wgpu renders to surface directly).
   let transparent = mode != CaptureMode::Freeze;
 
+  // Freeze mode: start hidden, show after first GPU frame to avoid white flash.
+  // Live modes: must be visible immediately for layered window APIs to work.
+  let start_visible = mode != CaptureMode::Freeze;
+
   let attrs = WindowAttributes::default()
     .with_title("QuickShotter Overlay")
+    .with_visible(start_visible)
     .with_transparent(transparent)
     .with_decorations(false)
     .with_resizable(false)

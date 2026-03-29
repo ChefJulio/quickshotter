@@ -185,6 +185,7 @@ pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
 }
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
+  let t0 = std::time::Instant::now();
   eprintln!("[overlay] open_overlay_with_mode called, mode={mode}");
 
   // Atomically check and set is_capturing
@@ -215,12 +216,20 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     return Ok(());
   }
 
-  // Get virtual desktop bounds
-  let bounds = match capture::get_desktop_bounds() {
-    Ok(b) => b,
-    Err(e) => {
-      app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-      return Err(e);
+  // Get virtual desktop bounds — use cached if available (avoids Monitor::all() OS call)
+  let bounds = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    state.cached_bounds.map(|(x, y, w, h)| capture::DesktopBounds { x, y, width: w, height: h })
+  };
+  let bounds = match bounds {
+    Some(b) => b,
+    None => match capture::get_desktop_bounds() {
+      Ok(b) => b,
+      Err(e) => {
+        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+        return Err(e);
+      }
     }
   };
   eprintln!("[overlay] desktop bounds: origin=({},{}) size={}x{}", bounds.x, bounds.y, bounds.width, bounds.height);
@@ -281,11 +290,11 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     let mut state = s.lock_or_recover();
     state.pending_screenshot = Some(screen.image);
     // No base64 needed anymore — the daemon renders the texture directly
-    state.pending_base64 = None;
+  
   }
 
   // Send capture command to daemon and handle result on a background thread
-  eprintln!("[overlay] sending capture command to daemon, mode={mode}");
+  eprintln!("[overlay] ready to send in {:?}, mode={mode}", t0.elapsed());
   let daemon_mode = mode.to_string();
   let app2 = app.clone();
 
@@ -298,7 +307,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
     match result {
       Ok(ref daemon_result) => {
-        eprintln!("[overlay] daemon result: {daemon_result:?}");
+        eprintln!("[overlay] daemon result received: {daemon_result:?}");
         dispatch_result(&app2, result.unwrap());
       }
       Err(e) => {
@@ -352,11 +361,37 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
   match result {
     DaemonResult::Ready => { /* shouldn't happen here */ }
     DaemonResult::Region { x1, y1, x2, y2, shift, alt } => {
+      // Check if the overlay was opened in OCR mode — route accordingly.
+      let overlay_mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
-        let result = crate::commands::complete_region_capture_from_overlay(
-          &app, x1, y1, x2, y2, shift, alt,
-        ).await;
+        let result = if overlay_mode == "ocr" {
+          // Convert screen coords to image coords (same as region capture)
+          let (bx, by) = {
+            let s = app.state::<Mutex<AppState>>();
+            let state = s.lock_or_recover();
+            match state.cached_bounds {
+              Some((x, y, _, _)) => (x, y),
+              None => {
+                drop(state);
+                let b = crate::capture::get_desktop_bounds().unwrap_or(
+                  crate::capture::DesktopBounds { x: 0, y: 0, width: 0, height: 0 }
+                );
+                (b.x, b.y)
+              }
+            }
+          };
+          let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
+          let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
+          let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
+          let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
+          crate::commands::complete_ocr_capture_from_overlay(&app, img_x1, img_y1, img_x2, img_y2)
+            .await.map(|_| ())
+        } else {
+          crate::commands::complete_region_capture_from_overlay(
+            &app, x1, y1, x2, y2, shift, alt,
+          ).await.map(|_| ())
+        };
         if let Err(e) = result {
           eprintln!("Region capture failed: {e}");
         }
@@ -405,7 +440,7 @@ fn reset_capture_state(app: &AppHandle) {
   let mut state = s.lock_or_recover();
   state.is_capturing = false;
   state.pending_screenshot = None;
-  state.pending_base64 = None;
+
   state.cached_bounds = None;
 }
 
