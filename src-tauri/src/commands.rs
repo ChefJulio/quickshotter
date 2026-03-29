@@ -79,8 +79,8 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     config.save_to_disk = !config.save_to_disk;
   }
 
-  // Clipboard: "image" copies the screenshot, "url" uploads and copies URL, "none" skips
-  let clipboard_action = config.clipboard_action.as_str();
+  // Clipboard copy is synchronous — user needs to paste immediately.
+  let clipboard_action = config.clipboard_action.clone();
   let copied = if clipboard_action == "image" {
     capture::copy_to_clipboard(img)?;
     true
@@ -88,56 +88,71 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
     false
   };
 
-  let saved = capture::save_to_disk(img, &config)?;
-  let filepath_str = saved.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
+  // Disk save + upload run in the background — no reason to block the return.
+  // Pre-generate the filepath so we can return it immediately and update history.
+  let filepath = if config.save_to_disk {
+    capture::reserve_filepath(&config)?
+  } else {
+    None
+  };
+  let filepath_str = filepath.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
-  if let Some(ref path) = saved {
+  if let Some(ref path) = filepath {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.add_to_history(path.clone());
     state.last_saved_path = Some(path.clone());
   }
 
-  // Upload if clipboard_action is "url"
-  if clipboard_action == "url" {
-    let img2 = img.clone();
-    let app2 = app.clone();
-    let copy_url = clipboard_action == "url";
-    tauri::async_runtime::spawn(async move {
-      match crate::catbox::upload(&img2).await {
-        Ok(url) => {
-          if copy_url {
-            capture::copy_text_to_clipboard(&url).ok();
-          }
-          use tauri_plugin_notification::NotificationExt;
-          app2.notification()
-            .builder()
-            .title("Uploaded to catbox.moe")
-            .body(&url)
-            .show()
-            .ok();
-          // Open in default browser
-          #[cfg(target_os = "windows")]
-          { std::process::Command::new("cmd").args(["/c", "start", &url]).spawn().ok(); }
-          #[cfg(target_os = "macos")]
-          { std::process::Command::new("open").arg(&url).spawn().ok(); }
-        }
-        Err(e) => {
-          eprintln!("Upload failed: {e}");
-          use tauri_plugin_notification::NotificationExt;
-          app2.notification()
-            .builder()
-            .title("Upload failed")
-            .body(&e.to_string())
-            .show()
-            .ok();
-        }
+  // Fire off background work: disk save, upload, tray refresh, notification
+  let img_bg = img.clone();
+  let app_bg = app.clone();
+  let filepath_bg = filepath.clone();
+  let filepath_str_bg = filepath_str.clone();
+  std::thread::spawn(move || {
+    // Save to disk
+    if let Some(ref path) = filepath_bg {
+      if let Err(e) = capture::write_image_to_path(&img_bg, path, &config) {
+        eprintln!("Background save failed: {e}");
       }
-    });
-  }
+    }
 
-  tray::refresh_tray_menu(app);
-  notify_capture(app, filepath_str.as_deref());
+    // Upload if clipboard_action is "url"
+    if clipboard_action == "url" {
+      let app2 = app_bg.clone();
+      tauri::async_runtime::spawn(async move {
+        match crate::catbox::upload(&img_bg).await {
+          Ok(url) => {
+            capture::copy_text_to_clipboard(&url).ok();
+            use tauri_plugin_notification::NotificationExt;
+            app2.notification()
+              .builder()
+              .title("Uploaded to catbox.moe")
+              .body(&url)
+              .show()
+              .ok();
+            #[cfg(target_os = "windows")]
+            { std::process::Command::new("cmd").args(["/c", "start", &url]).spawn().ok(); }
+            #[cfg(target_os = "macos")]
+            { std::process::Command::new("open").arg(&url).spawn().ok(); }
+          }
+          Err(e) => {
+            eprintln!("Upload failed: {e}");
+            use tauri_plugin_notification::NotificationExt;
+            app2.notification()
+              .builder()
+              .title("Upload failed")
+              .body(&e.to_string())
+              .show()
+              .ok();
+          }
+        }
+      });
+    }
+
+    tray::refresh_tray_menu(&app_bg);
+    notify_capture(&app_bg, filepath_str_bg.as_deref());
+  });
 
   Ok(CaptureResultDto {
     filepath: filepath_str,
@@ -172,7 +187,7 @@ pub async fn prepare_delayed_capture(
 
   // Brief pause for overlay to de-render
   let _ = tauri::async_runtime::spawn_blocking(|| {
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    std::thread::sleep(std::time::Duration::from_millis(50));
   }).await;
 
   // All positions are now in physical screen coordinates (converted by JS).
@@ -282,7 +297,7 @@ pub async fn execute_delayed_capture(app: AppHandle) -> Result<(), AppError> {
   }
   // Wait for windows to fully disappear from screen
   let _ = tauri::async_runtime::spawn_blocking(|| {
-    std::thread::sleep(std::time::Duration::from_millis(250));
+    std::thread::sleep(std::time::Duration::from_millis(50));
   }).await;
   // Now destroy (after screenshot area is clear)
   if let Some(w) = app.get_webview_window("countdown") {
@@ -573,6 +588,7 @@ async fn complete_region_capture_inner(
   // pre-capture to avoid timing issues with overlay compositing).
   let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
 
+  // Coordinates here are image-space (already converted from screen-space by the caller).
   let image = if has_pending {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
@@ -582,10 +598,12 @@ async fn complete_region_capture_inner(
       .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))?;
     safe_crop(screenshot, left, top, w, h)?
   } else {
-    // Wait for the overlay window to fully de-render before capturing.
-    // Spawn on a blocking thread to avoid blocking the async worker.
+    // Wait for overlay to de-render before capturing. The native overlay daemon
+    // already waits 34ms before sending its result, so this only needs to cover
+    // one extra vsync frame. For the webview overlay path (delayed captures),
+    // this covers the hide() animation.
     let _ = tauri::async_runtime::spawn_blocking(|| {
-      std::thread::sleep(std::time::Duration::from_millis(150));
+      std::thread::sleep(std::time::Duration::from_millis(50));
     }).await;
     let screen = capture::capture_all_monitors()?;
     safe_crop(&screen.image, left, top, w, h)?
@@ -600,6 +618,44 @@ async fn complete_region_capture_inner(
   }
 
   finalize_capture_with_toggle(app, &image, toggle_save)
+}
+
+// -- Native overlay dispatch (called from overlay daemon result handler) --
+
+/// Called by the native overlay daemon when a region is selected.
+/// Wraps the existing complete_region_capture_inner with the overlay-specific flow.
+pub async fn complete_region_capture_from_overlay(
+  app: &AppHandle,
+  x1: i32, y1: i32, x2: i32, y2: i32,
+  shift: bool, alt: bool,
+) -> Result<CaptureResultDto, AppError> {
+  // Use cached bounds from overlay open (avoids re-enumerating monitors)
+  let (bx, by) = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    match state.cached_bounds {
+      Some((x, y, _, _)) => (x, y),
+      None => {
+        drop(state);
+        let b = capture::get_desktop_bounds()?;
+        (b.x, b.y)
+      }
+    }
+  };
+  let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
+  let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
+  let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
+  let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
+  complete_region_capture_inner(app, img_x1, img_y1, img_x2, img_y2, shift, alt).await
+}
+
+/// Called by the native overlay daemon when a window is selected.
+pub async fn complete_window_capture_from_overlay(
+  app: &AppHandle,
+  left: i32, top: i32, right: i32, bottom: i32,
+  shift: bool, alt: bool,
+) -> Result<CaptureResultDto, AppError> {
+  complete_window_capture_inner(app, left, top, right, bottom, shift, alt).await
 }
 
 // -- OCR capture command --
@@ -656,7 +712,7 @@ async fn complete_ocr_capture_inner(
     safe_crop(screenshot, left, top, w, h)?
   } else {
     let _ = tauri::async_runtime::spawn_blocking(|| {
-      std::thread::sleep(std::time::Duration::from_millis(150));
+      std::thread::sleep(std::time::Duration::from_millis(50));
     }).await;
     let screen = capture::capture_all_monitors()?;
     safe_crop(&screen.image, left, top, w, h)?
@@ -816,7 +872,18 @@ async fn complete_window_capture_inner(
   // xcap window coordinates are in logical points on macOS but physical pixels
   // on Windows. The captured image is always in physical pixels. Compute the
   // scale factor so we crop at the correct physical pixel offsets.
-  let bounds = capture::get_desktop_bounds()?;
+  // Use cached bounds from overlay open when available.
+  let bounds = {
+    let s = app.state::<Mutex<AppState>>();
+    let state = s.lock_or_recover();
+    match state.cached_bounds {
+      Some((x, y, w, h)) => capture::DesktopBounds { x, y, width: w, height: h },
+      None => {
+        drop(state);
+        capture::get_desktop_bounds()?
+      }
+    }
+  };
 
   let image = if has_pending {
     let s = app.state::<Mutex<AppState>>();
@@ -835,7 +902,7 @@ async fn complete_window_capture_inner(
   } else {
     // Capture fresh after overlay is hidden (outer function already hid it)
     let _ = tauri::async_runtime::spawn_blocking(|| {
-      std::thread::sleep(std::time::Duration::from_millis(150));
+      std::thread::sleep(std::time::Duration::from_millis(50));
     }).await;
     let screen = capture::capture_all_monitors()?;
     let sx = screen.image.width() as f64 / bounds.width.max(1) as f64;
@@ -876,7 +943,7 @@ pub async fn complete_select_screen_capture(
   }
   // Brief delay for overlay to hide
   let _ = tauri::async_runtime::spawn_blocking(|| {
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    std::thread::sleep(std::time::Duration::from_millis(50));
   }).await;
 
   let screen = capture::capture_monitor(monitor_index)?;
@@ -896,17 +963,30 @@ pub async fn complete_select_screen_capture(
 
 /// Store image for annotation and open the editor window.
 /// Sets `is_annotating` to block concurrent captures while the editor is open.
+/// Writes image to a temp JPEG file loaded via asset protocol (no base64 IPC).
 async fn open_annotation_for_image(
   app: &AppHandle,
   image: image::RgbaImage,
 ) -> Result<CaptureResultDto, AppError> {
-  let base64 = capture::image_to_base64_png(&image)?;
+  // Write JPEG to temp file — ~10x faster than PNG encode + base64 + IPC transfer.
+  // The original RgbaImage stays in pending_annotation for lossless final save.
+  let temp_path = std::env::temp_dir().join("qs_annotation.jpg");
+  {
+    let rgb = capture::rgba_to_rgb_pub(&image)?;
+    let file = std::fs::File::create(&temp_path)
+      .map_err(|e| AppError::Annotation(format!("Failed to create temp file: {e}")))?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+    encoder
+      .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+      .map_err(|e| AppError::Annotation(format!("Failed to encode temp JPEG: {e}")))?;
+  }
 
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.pending_annotation = Some(image);
-    state.pending_annotation_base64 = Some(base64);
+    state.pending_annotation_path = Some(temp_path);
     state.is_annotating = true;
   }
 
@@ -916,7 +996,7 @@ async fn open_annotation_for_image(
     let mut state = s.lock_or_recover();
     state.is_annotating = false;
     state.pending_annotation = None;
-    state.pending_annotation_base64 = None;
+    state.pending_annotation_path = None;
     return Err(e);
   }
 
@@ -927,13 +1007,14 @@ async fn open_annotation_for_image(
   })
 }
 
-/// Annotation editor: fetch the pending image as base64 PNG.
-/// Takes ownership (drops from state) to free memory since it's only needed once.
+/// Annotation editor: fetch the temp file path for the annotation image.
+/// The frontend loads this via Tauri's asset protocol (convertFileSrc).
 #[tauri::command]
 pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
   app.state::<Mutex<AppState>>().lock_or_recover()
-    .pending_annotation_base64
-    .take()
+    .pending_annotation_path
+    .as_ref()
+    .map(|p| p.to_string_lossy().to_string())
     .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))
 }
 
@@ -1058,13 +1139,24 @@ pub fn annotate_file_from_path(app: &AppHandle, path: &std::path::Path) -> Resul
     .map_err(|e| AppError::Annotation(format!("Failed to open image: {e}")))?
     .to_rgba8();
 
-  let base64 = capture::image_to_base64_png(&img)?;
+  // Write JPEG to temp file for fast loading via asset protocol
+  let temp_path = std::env::temp_dir().join("qs_annotation.jpg");
+  {
+    let rgb = capture::rgba_to_rgb_pub(&img)?;
+    let file = std::fs::File::create(&temp_path)
+      .map_err(|e| AppError::Annotation(format!("Failed to create temp file: {e}")))?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+    encoder
+      .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+      .map_err(|e| AppError::Annotation(format!("Failed to encode temp JPEG: {e}")))?;
+  }
 
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.pending_annotation = Some(img);
-    state.pending_annotation_base64 = Some(base64);
+    state.pending_annotation_path = Some(temp_path);
     state.annotation_source_path = Some(path.to_path_buf());
     state.is_annotating = true;
   }
@@ -1074,7 +1166,7 @@ pub fn annotate_file_from_path(app: &AppHandle, path: &std::path::Path) -> Resul
     let mut state = s.lock_or_recover();
     state.is_annotating = false;
     state.pending_annotation = None;
-    state.pending_annotation_base64 = None;
+    state.pending_annotation_path = None;
     state.annotation_source_path = None;
     return Err(e);
   }

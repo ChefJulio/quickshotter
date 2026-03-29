@@ -1,5 +1,5 @@
 import './annotation.css';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { AnnotationConfig } from './types';
 
@@ -1523,8 +1523,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     const safeTop = Math.max(8, ((window.screen as any).availTop || 0) + 8);
     toolbar.style.top = `${safeTop}px`;
 
-    // Load the captured image
-    const base64Data: string = await invoke('get_pending_annotation');
+    // Load the captured image via asset protocol (no base64 IPC overhead)
+    const filePath: string = await invoke('get_pending_annotation');
+    const assetUrl = convertFileSrc(filePath);
     const img = new Image();
     img.onload = async () => {
       sourceImage = img;
@@ -1539,7 +1540,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       console.error('Failed to load annotation image');
       cancelAnnotation();
     };
-    img.src = `data:image/png;base64,${base64Data}`;
+    img.src = assetUrl;
   } catch (e) {
     console.error('Annotation editor init failed:', e);
     cancelAnnotation();

@@ -37,12 +37,19 @@ fn register_hotkeys_from_config(
     format!("Invalid record hotkey '{}': {}", config.hotkey_record, e)
   })?;
 
-  app.global_shortcut().on_shortcut(region_shortcut, {
+  eprintln!("[hotkeys] registering region shortcut: {}", config.hotkey_region);
+  let region_result = app.global_shortcut().on_shortcut(region_shortcut, {
     let app = app.clone();
     move |_app_handle, _shortcut, _event| {
+      eprintln!("[hotkey] region capture hotkey fired");
       crate::commands::delayed_region_capture(&app);
     }
-  })?;
+  });
+  match &region_result {
+    Ok(()) => eprintln!("[hotkeys] region shortcut registered OK"),
+    Err(e) => eprintln!("[hotkeys] region shortcut FAILED: {e}"),
+  }
+  region_result?;
 
   app.global_shortcut().on_shortcut(fullscreen_shortcut, {
     let app = app.clone();

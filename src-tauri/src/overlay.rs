@@ -1,4 +1,9 @@
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::capture;
@@ -6,28 +11,196 @@ use crate::error::AppError;
 use crate::state::{AppState, LockRecover};
 use crate::window_capture;
 
+// ── Daemon protocol types ──────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+enum DaemonCommand {
+  Capture {
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    image_width: u32,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    image_height: u32,
+    origin_x: i32,
+    origin_y: i32,
+    bounds_w: u32,
+    bounds_h: u32,
+  },
+  #[allow(dead_code)]
+  Cancel,
+  Quit,
+}
+
+#[allow(dead_code)]
+fn is_zero_u32(v: &u32) -> bool { *v == 0 }
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum DaemonResult {
+  Ready,
+  Region { x1: i32, y1: i32, x2: i32, y2: i32, shift: bool, alt: bool },
+  Window { left: i32, top: i32, right: i32, bottom: i32, shift: bool, alt: bool },
+  RecordRegion { x: i32, y: i32, width: u32, height: u32 },
+  SelectScreen { monitor_index: u32 },
+  Cancelled,
+}
+
+// ── Daemon state ───────────────────────────────────────────────────
+
+pub struct OverlayDaemon {
+  child: Child,
+  stdin: ChildStdin,
+  stdout: BufReader<ChildStdout>,
+  #[allow(dead_code)]
+  ready: bool,
+}
+
+impl OverlayDaemon {
+  fn spawn() -> Result<Self, AppError> {
+    let exe = find_overlay_binary()?;
+    let mut child = Command::new(&exe)
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::inherit())
+      .spawn()
+      .map_err(|e| AppError::Capture(format!("Failed to spawn overlay daemon at {}: {e}", exe.display())))?;
+
+    let stdin = child.stdin.take()
+      .ok_or_else(|| AppError::Capture("No stdin on overlay daemon".to_string()))?;
+    let stdout = child.stdout.take()
+      .ok_or_else(|| AppError::Capture("No stdout on overlay daemon".to_string()))?;
+    let mut stdout = BufReader::new(stdout);
+
+    // Wait for "ready" signal (GPU initialized)
+    let mut line = String::new();
+    stdout.read_line(&mut line)
+      .map_err(|e| AppError::Capture(format!("Overlay daemon startup failed: {e}")))?;
+
+    let ready = serde_json::from_str::<DaemonResult>(&line)
+      .map(|r| matches!(r, DaemonResult::Ready))
+      .unwrap_or(false);
+
+    if !ready {
+      return Err(AppError::Capture(format!("Overlay daemon did not report ready: {}", line.trim())));
+    }
+
+    Ok(Self { child, stdin, stdout, ready: true })
+  }
+
+  fn send(&mut self, cmd: &DaemonCommand) -> Result<(), AppError> {
+    let json = serde_json::to_string(cmd)
+      .map_err(|e| AppError::Capture(format!("Failed to serialize command: {e}")))?;
+    writeln!(self.stdin, "{json}")
+      .map_err(|e| AppError::Capture(format!("Failed to write to daemon stdin: {e}")))?;
+    self.stdin.flush()
+      .map_err(|e| AppError::Capture(format!("Failed to flush daemon stdin: {e}")))?;
+    Ok(())
+  }
+
+  fn read_result(&mut self) -> Result<DaemonResult, AppError> {
+    let mut line = String::new();
+    self.stdout.read_line(&mut line)
+      .map_err(|e| AppError::Capture(format!("Failed to read daemon stdout: {e}")))?;
+    serde_json::from_str(&line)
+      .map_err(|e| AppError::Capture(format!("Invalid daemon response '{}': {e}", line.trim())))
+  }
+
+  fn is_alive(&mut self) -> bool {
+    matches!(self.child.try_wait(), Ok(None))
+  }
+
+  fn kill(&mut self) {
+    let _ = self.send(&DaemonCommand::Quit);
+    let _ = self.child.kill();
+    let _ = self.child.wait();
+  }
+}
+
+impl Drop for OverlayDaemon {
+  fn drop(&mut self) {
+    self.kill();
+  }
+}
+
+// ── Daemon lifecycle ───────────────────────────────────────────────
+
+/// Global daemon instance. Protected by its own mutex (separate from AppState
+/// to avoid holding AppState lock during blocking I/O with the daemon).
+static DAEMON: Mutex<Option<OverlayDaemon>> = Mutex::new(None);
+
+/// Spawn the overlay daemon. Called once at app startup to pre-warm the GPU.
+pub fn spawn_daemon() {
+  std::thread::spawn(|| {
+    match OverlayDaemon::spawn() {
+      Ok(daemon) => {
+        eprintln!("Overlay daemon started (GPU pre-warmed)");
+        *DAEMON.lock().unwrap_or_else(|e| e.into_inner()) = Some(daemon);
+      }
+      Err(e) => {
+        eprintln!("Failed to start overlay daemon: {e}");
+        // Non-fatal: overlay will try to spawn on first capture
+      }
+    }
+  });
+}
+
+/// Get or spawn the daemon. Returns the lock guard.
+fn get_daemon() -> Result<std::sync::MutexGuard<'static, Option<OverlayDaemon>>, AppError> {
+  let mut guard = DAEMON.lock().unwrap_or_else(|e| e.into_inner());
+
+  // Check if daemon is alive, respawn if not
+  let needs_spawn = match guard.as_mut() {
+    Some(d) => !d.is_alive(),
+    None => true,
+  };
+
+  if needs_spawn {
+    eprintln!("Overlay daemon not running, spawning...");
+    *guard = Some(OverlayDaemon::spawn()?);
+  }
+
+  Ok(guard)
+}
+
+/// Shut down the daemon. Called on app exit.
+#[allow(dead_code)]
+pub fn shutdown_daemon() {
+  if let Ok(mut guard) = DAEMON.lock() {
+    if let Some(daemon) = guard.as_mut() {
+      daemon.kill();
+    }
+    *guard = None;
+  }
+}
+
+// ── Public overlay API (same signatures as before) ─────────────────
+
 pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
   let mode = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_mode.clone();
   open_overlay_with_mode(app, &mode)
 }
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
-  // Atomically check and set is_capturing in a single lock scope
-  // to prevent two rapid hotkey presses from opening duplicate overlays,
-  // and block captures while the annotation editor is open.
+  eprintln!("[overlay] open_overlay_with_mode called, mode={mode}");
+
+  // Atomically check and set is_capturing
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     if state.is_capturing || state.is_annotating || state.is_recording {
+      eprintln!("[overlay] blocked: is_capturing={} is_annotating={} is_recording={}",
+        state.is_capturing, state.is_annotating, state.is_recording);
       return Ok(());
     }
     state.is_capturing = true;
     state.overlay_mode = mode.to_string();
   }
 
-  // On macOS, check screen recording permission BEFORE capturing or opening
-  // the overlay.  Without this gate the overlay and the system permission dialog
-  // appear simultaneously, which is confusing.
+  // macOS screen recording permission check
   #[cfg(target_os = "macos")]
   if !capture::has_screen_recording_permission() {
     capture::request_screen_recording_permission();
@@ -42,7 +215,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     return Ok(());
   }
 
-  // Get virtual desktop bounds (fast, no image capture)
+  // Get virtual desktop bounds
   let bounds = match capture::get_desktop_bounds() {
     Ok(b) => b,
     Err(e) => {
@@ -50,22 +223,24 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       return Err(e);
     }
   };
+  eprintln!("[overlay] desktop bounds: origin=({},{}) size={}x{}", bounds.x, bounds.y, bounds.width, bounds.height);
 
-  // Start the window detection worker early so it can begin caching results
-  // while the overlay window is being created.
+  // Cache bounds so completion handlers don't re-enumerate monitors
+  app.state::<Mutex<AppState>>().lock_or_recover().cached_bounds =
+    Some((bounds.x, bounds.y, bounds.width, bounds.height));
+
+  // Start window detection worker for window mode
   if mode == "window" {
     window_capture::start();
   }
 
-  // Freeze mode captures upfront for a frozen preview.
-  // Window mode skips this -- it shows a transparent overlay and captures on click.
-  // On macOS, screenshot modes pre-capture because hiding the overlay and recapturing
-  // has unreliable timing -- the compositor may not finish re-rendering windows
-  // within the delay, resulting in only the desktop background being captured.
-  // Recording always uses instant mode -- freezing the screen for region selection
-  // makes no sense when the goal is to capture live video.
+  // Pre-capture for freeze mode (and all modes on macOS)
   let is_recording = mode == "record_region";
   let needs_capture = !is_recording && (mode == "freeze" || cfg!(target_os = "macos"));
+
+  let mut image_path: Option<String> = None;
+  let mut image_width: u32 = 0;
+  let mut image_height: u32 = 0;
 
   if needs_capture {
     let screen = match capture::capture_all_monitors() {
@@ -76,8 +251,6 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       }
     };
 
-    // Detect likely permission denial (black screenshot) on macOS.
-    // Abort early -- continuing would show a useless black overlay.
     #[cfg(target_os = "macos")]
     if capture::is_likely_blank(&screen.image) {
       use tauri_plugin_notification::NotificationExt;
@@ -91,89 +264,202 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       return Ok(());
     }
 
-    // Only generate base64 preview for freeze mode (it displays a frozen image).
-    // Instant/window modes on macOS just need the raw image for cropping later.
-    let base64_data = if mode == "freeze" {
-      match capture::image_to_base64(&screen.image) {
-        Ok(d) => Some(d),
-        Err(e) => {
-          app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-          return Err(e);
-        }
+    // Write raw RGBA to temp file for the overlay daemon
+    if mode == "freeze" {
+      let temp = std::env::temp_dir().join("qs_overlay_capture.raw");
+      if let Err(e) = std::fs::write(&temp, screen.image.as_raw()) {
+        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+        return Err(AppError::Capture(format!("Failed to write temp capture: {e}")));
       }
-    } else {
-      None
-    };
+      image_path = Some(temp.to_string_lossy().to_string());
+      image_width = screen.image.width();
+      image_height = screen.image.height();
+    }
 
+    // Store pending screenshot for cropping after selection
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.pending_screenshot = Some(screen.image);
-    state.pending_base64 = base64_data;
-  }
-
-  // Span overlay across the entire virtual desktop (all monitors)
-  let build_result = WebviewWindowBuilder::new(app, "overlay", WebviewUrl::App("overlay.html".into()))
-    .title("QuickShotter Overlay")
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    .resizable(false)
-    .position(bounds.x as f64, bounds.y as f64)
-    .inner_size(bounds.width as f64, bounds.height as f64)
-    .visible(false)
-    .skip_taskbar(true)
-    .build();
-
-  if let Err(e) = build_result {
-    // Reset state so future captures aren't permanently blocked
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.is_capturing = false;
-    state.pending_screenshot = None;
+    // No base64 needed anymore — the daemon renders the texture directly
     state.pending_base64 = None;
-    return Err(e.into());
   }
 
-  // Find overlay's xcap window ID for window detection exclusion.
-  // Retry because the window may not be visible to xcap immediately after build.
-  // Use more retries with longer delays -- on boot the system may be slow.
-  let mut overlay_id = 0u32;
-  for _ in 0..10 {
-    overlay_id = xcap::Window::all()
-      .unwrap_or_default()
-      .iter()
-      .find(|w| w.title().unwrap_or_default() == "QuickShotter Overlay")
-      .and_then(|w| w.id().ok())
-      .unwrap_or(0);
-    if overlay_id != 0 { break; }
-    std::thread::sleep(std::time::Duration::from_millis(100));
-  }
-  if overlay_id == 0 {
-    eprintln!("Warning: Could not find overlay window ID for exclusion (window capture exclusion disabled)");
-  }
-  app.state::<Mutex<AppState>>().lock_or_recover().overlay_window_id = overlay_id;
+  // Send capture command to daemon and handle result on a background thread
+  eprintln!("[overlay] sending capture command to daemon, mode={mode}");
+  let daemon_mode = mode.to_string();
+  let app2 = app.clone();
+
+  std::thread::spawn(move || {
+    eprintln!("[overlay] background thread: calling run_capture_on_daemon");
+    let result = run_capture_on_daemon(
+      &daemon_mode, image_path, image_width, image_height,
+      bounds.x, bounds.y, bounds.width, bounds.height,
+    );
+
+    match result {
+      Ok(ref daemon_result) => {
+        eprintln!("[overlay] daemon result: {daemon_result:?}");
+        dispatch_result(&app2, result.unwrap());
+      }
+      Err(e) => {
+        eprintln!("[overlay] daemon error: {e}");
+        reset_capture_state(&app2);
+      }
+    }
+  });
 
   Ok(())
 }
 
-pub fn close_overlay(app: &AppHandle) {
-  window_capture::stop();
-  if let Some(overlay) = app.get_webview_window("overlay") {
-    if let Err(e) = overlay.destroy() {
-      eprintln!("Failed to destroy overlay window: {e}");
+/// Send a capture command to the daemon and wait for the result.
+/// This blocks the calling thread (which is why it runs on a background thread).
+fn run_capture_on_daemon(
+  mode: &str,
+  image: Option<String>,
+  image_width: u32,
+  image_height: u32,
+  origin_x: i32,
+  origin_y: i32,
+  bounds_w: u32,
+  bounds_h: u32,
+) -> Result<DaemonResult, AppError> {
+  let mut guard = get_daemon()?;
+  let daemon = guard.as_mut()
+    .ok_or_else(|| AppError::Capture("Daemon not available".to_string()))?;
+
+  let cmd = DaemonCommand::Capture {
+    mode: mode.to_string(),
+    image,
+    image_width,
+    image_height,
+    origin_x,
+    origin_y,
+    bounds_w,
+    bounds_h,
+  };
+
+  daemon.send(&cmd)?;
+  daemon.read_result()
+}
+
+/// Dispatch the daemon's result to the existing capture pipeline.
+///
+/// IMPORTANT: By the time we get here, the daemon has already destroyed its
+/// overlay window. For live/instant mode (no pending_screenshot), we need a
+/// short delay to let the compositor finish removing the window before we
+/// capture the screen fresh.
+fn dispatch_result(app: &AppHandle, result: DaemonResult) {
+  match result {
+    DaemonResult::Ready => { /* shouldn't happen here */ }
+    DaemonResult::Region { x1, y1, x2, y2, shift, alt } => {
+      let app = app.clone();
+      tauri::async_runtime::spawn(async move {
+        let result = crate::commands::complete_region_capture_from_overlay(
+          &app, x1, y1, x2, y2, shift, alt,
+        ).await;
+        if let Err(e) = result {
+          eprintln!("Region capture failed: {e}");
+        }
+        close_overlay(&app);
+      });
+    }
+    DaemonResult::Window { left, top, right, bottom, shift, alt } => {
+      let app = app.clone();
+      tauri::async_runtime::spawn(async move {
+        let result = crate::commands::complete_window_capture_from_overlay(
+          &app, left, top, right, bottom, shift, alt,
+        ).await;
+        if let Err(e) = result {
+          eprintln!("Window capture failed: {e}");
+        }
+        close_overlay(&app);
+      });
+    }
+    DaemonResult::RecordRegion { x, y, width, height } => {
+      let app = app.clone();
+      tauri::async_runtime::spawn(async move {
+        eprintln!("Record region: {}x{} at ({}, {})", width, height, x, y);
+        close_overlay(&app);
+      });
+    }
+    DaemonResult::SelectScreen { monitor_index } => {
+      let app = app.clone();
+      tauri::async_runtime::spawn(async move {
+        let result = crate::commands::complete_select_screen_capture(
+          app.clone(), monitor_index as usize,
+        ).await;
+        if let Err(e) = result {
+          eprintln!("Select screen capture failed: {e}");
+        }
+        close_overlay(&app);
+      });
+    }
+    DaemonResult::Cancelled => {
+      close_overlay(app);
     }
   }
+}
+
+fn reset_capture_state(app: &AppHandle) {
   let s = app.state::<Mutex<AppState>>();
   let mut state = s.lock_or_recover();
   state.is_capturing = false;
   state.pending_screenshot = None;
   state.pending_base64 = None;
-  state.overlay_window_id = 0;
+  state.cached_bounds = None;
 }
 
+pub fn close_overlay(app: &AppHandle) {
+  window_capture::stop();
+  reset_capture_state(app);
+  // Clean up temp file
+  let temp = std::env::temp_dir().join("qs_overlay_capture.raw");
+  let _ = std::fs::remove_file(temp);
+}
+
+/// Find the overlay binary relative to the main executable.
+fn find_overlay_binary() -> Result<PathBuf, AppError> {
+  let exe = std::env::current_exe()
+    .map_err(|e| AppError::Capture(format!("Cannot find exe path: {e}")))?;
+  let exe_dir = exe.parent()
+    .ok_or_else(|| AppError::Capture("Exe has no parent dir".to_string()))?;
+
+  // Production: next to main exe
+  let prod = exe_dir.join("quickshotter-overlay.exe");
+  if prod.exists() { return Ok(prod); }
+
+  // Also check without .exe (macOS/Linux)
+  let prod_unix = exe_dir.join("quickshotter-overlay");
+  if prod_unix.exists() { return Ok(prod_unix); }
+
+  // Development: walk up from src-tauri/target/debug/ to find overlay/target/debug/
+  let mut dir = exe_dir;
+  for _ in 0..5 {
+    // Check for overlay/target/debug/ or overlay/target/release/
+    let dev_debug = dir.join("overlay").join("target").join("debug").join("quickshotter-overlay.exe");
+    if dev_debug.exists() { return Ok(dev_debug); }
+    let dev_release = dir.join("overlay").join("target").join("release").join("quickshotter-overlay.exe");
+    if dev_release.exists() { return Ok(dev_release); }
+    // Unix variants
+    let dev_debug_unix = dir.join("overlay").join("target").join("debug").join("quickshotter-overlay");
+    if dev_debug_unix.exists() { return Ok(dev_debug_unix); }
+    let dev_release_unix = dir.join("overlay").join("target").join("release").join("quickshotter-overlay");
+    if dev_release_unix.exists() { return Ok(dev_release_unix); }
+
+    match dir.parent() {
+      Some(p) => dir = p,
+      None => break,
+    }
+  }
+
+  Err(AppError::Capture(
+    "Overlay binary not found. Build it with: cd overlay && cargo build".to_string()
+  ))
+}
+
+// ── Annotation window (unchanged) ──────────────────────────────────
+
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
-  // Size the window to 80% of the primary monitor, centered.
   let (x, y, w, h) = if let Ok(Some(monitor)) = app.primary_monitor() {
     let pos = monitor.position();
     let size = monitor.size();
@@ -213,8 +499,12 @@ pub fn close_annotation_window(app: &AppHandle) {
   }
   let s = app.state::<Mutex<AppState>>();
   let mut state = s.lock_or_recover();
+  // Clean up temp annotation file
+  if let Some(ref path) = state.pending_annotation_path {
+    let _ = std::fs::remove_file(path);
+  }
   state.pending_annotation = None;
-  state.pending_annotation_base64 = None;
+  state.pending_annotation_path = None;
   state.annotation_source_path = None;
   state.is_annotating = false;
 }

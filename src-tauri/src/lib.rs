@@ -128,6 +128,11 @@ pub fn run() {
         });
       }
 
+      // Spawn overlay daemon to pre-warm the GPU. This happens in the background
+      // so it doesn't block app startup. The daemon will be ready before the user
+      // presses their first hotkey.
+      overlay::spawn_daemon();
+
       if let Err(e) = hotkeys::register_hotkeys(&app.handle()) {
         eprintln!("Failed to register hotkeys: {e}");
         use tauri_plugin_notification::NotificationExt;
@@ -162,8 +167,11 @@ pub fn run() {
         } else if label == "annotation" {
           let mut state = s.lock_or_recover();
           state.is_annotating = false;
+          if let Some(ref path) = state.pending_annotation_path {
+            let _ = std::fs::remove_file(path);
+          }
           state.pending_annotation = None;
-          state.pending_annotation_base64 = None;
+          state.pending_annotation_path = None;
           state.annotation_source_path = None;
         } else if label == "recording-indicator" {
           // If the indicator is destroyed while recording, stop the recording

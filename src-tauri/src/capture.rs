@@ -1,7 +1,5 @@
 use arboard::Clipboard;
-use base64::Engine;
 use image::{GenericImage, ImageBuffer, ImageEncoder, RgbaImage};
-use std::io::Cursor;
 use std::path::PathBuf;
 use xcap::Monitor;
 
@@ -269,6 +267,10 @@ fn get_cursor_position() -> Result<(i32, i32), AppError> {
 
 /// Convert RGBA image to RGB bytes without cloning the source image.
 /// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
+pub fn rgba_to_rgb_pub(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
+  rgba_to_rgb(img)
+}
+
 fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
   let (w, h) = (img.width(), img.height());
   let rgb_bytes: Vec<u8> = img
@@ -280,27 +282,7 @@ fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
     .ok_or_else(|| AppError::Capture("RGB buffer size mismatch".to_string()))
 }
 
-/// Encode an image as JPEG base64 for sending to the overlay webview.
-/// Uses JPEG instead of PNG -- ~10x faster encoding, only used for preview.
-pub fn image_to_base64(img: &RgbaImage) -> Result<String, AppError> {
-  let rgb = rgba_to_rgb(img)?;
-  let mut buf = Cursor::new(Vec::new());
-  let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 80);
-  encoder
-    .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
-    .map_err(|e| AppError::Capture(e.to_string()))?;
-  Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
-}
 
-/// Encode an image as lossless PNG base64 for the annotation editor.
-pub fn image_to_base64_png(img: &RgbaImage) -> Result<String, AppError> {
-  let mut buf = Cursor::new(Vec::new());
-  let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-  encoder
-    .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
-    .map_err(|e: image::ImageError| AppError::Capture(e.to_string()))?;
-  Ok(base64::engine::general_purpose::STANDARD.encode(buf.into_inner()))
-}
 
 /// Check if the app has screen recording permission on macOS.
 /// Uses CGPreflightScreenCaptureAccess (macOS 10.15+) to check without prompting.
@@ -464,8 +446,9 @@ fn sanitize_filename_part(s: &str) -> String {
     .replace("..", "_")
 }
 
-/// Save an image to disk based on config. Returns the filepath if saved.
-pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
+/// Reserve a filepath for saving (creates dirs, handles collisions) without writing.
+/// Returns the path the image will be saved to.
+pub fn reserve_filepath(config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
   if !config.save_to_disk {
     return Ok(None);
   }
@@ -474,10 +457,8 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
   std::fs::create_dir_all(&folder)?;
 
   let ext = &config.format;
-  // Sanitize prefix and suffix to prevent path traversal
   let safe_prefix = sanitize_filename_part(&config.filename_prefix);
   let safe_suffix = sanitize_filename_part(&config.filename_suffix);
-  // Validate chrono format string; fall back to default if invalid
   let timestamp = {
     let has_error = chrono::format::strftime::StrftimeItems::new(&safe_suffix)
       .any(|item| matches!(item, chrono::format::Item::Error));
@@ -488,21 +469,24 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
     }
   };
   let base_name = format!("{}_{}", safe_prefix, timestamp);
-  // Final safety net: strip any remaining directory components
   let base_name = std::path::Path::new(&base_name)
     .file_name()
     .map(|n| n.to_string_lossy().to_string())
     .unwrap_or_else(|| format!("screenshot_{}", chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")));
   let mut filepath = folder.join(format!("{}.{}", base_name, ext));
 
-  // Collision avoidance: append _2, _3, etc. if file exists (bounded)
   let mut counter = 2u32;
   while filepath.exists() && counter < 10_000 {
     filepath = folder.join(format!("{}_{}.{}", base_name, counter, ext));
     counter += 1;
   }
 
-  match ext.as_str() {
+  Ok(Some(filepath))
+}
+
+/// Write an image to an already-reserved path. Format is inferred from config.
+pub fn write_image_to_path(img: &RgbaImage, filepath: &PathBuf, config: &AppConfig) -> Result<(), AppError> {
+  match config.format.as_str() {
     "jpg" | "jpeg" => {
       // Stream JPEG directly to file via BufWriter -- avoids buffering the
       // entire encoded image in memory before writing.
@@ -525,10 +509,31 @@ pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBu
         .map_err(|e| AppError::Capture(e.to_string()))?;
     }
     _ => {
-      // PNG (default)
-      img.save(&filepath).map_err(|e| AppError::Capture(e.to_string()))?;
+      // PNG — use fast compression (zlib level 1) for ~3-5x faster saves.
+      // File size is ~10-20% larger but encoding is dramatically faster.
+      let file = std::fs::File::create(&filepath)?;
+      let mut writer = std::io::BufWriter::new(file);
+      let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        &mut writer,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Sub,
+      );
+      encoder
+        .write_image(img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgba8)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
     }
   }
 
+  Ok(())
+}
+
+/// Save an image to disk based on config. Returns the filepath if saved.
+/// Combines reserve_filepath + write_image_to_path for callers that need both.
+pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
+  let filepath = match reserve_filepath(config)? {
+    Some(p) => p,
+    None => return Ok(None),
+  };
+  write_image_to_path(img, &filepath, config)?;
   Ok(Some(filepath))
 }

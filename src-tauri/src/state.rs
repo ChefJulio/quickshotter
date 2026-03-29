@@ -21,11 +21,14 @@ pub struct AppState {
   pub last_saved_path: Option<PathBuf>,
   // Overlay mode: "instant", "freeze", or "window"
   pub overlay_mode: String,
+  // Desktop bounds cached when overlay opens (avoids re-enumerating monitors)
+  pub cached_bounds: Option<(i32, i32, u32, u32)>,
   // Window ID of the overlay (used to exclude from window detection)
   pub overlay_window_id: u32,
   // Annotation: image waiting to be annotated
   pub pending_annotation: Option<RgbaImage>,
-  pub pending_annotation_base64: Option<String>,
+  // Temp file path for annotation image (loaded via asset protocol, not base64)
+  pub pending_annotation_path: Option<PathBuf>,
   // When annotating a file from disk, stores the source path for save-beside behavior
   pub annotation_source_path: Option<PathBuf>,
   // Delayed capture: saved params while countdown window is showing
@@ -49,9 +52,10 @@ impl AppState {
       pending_base64: None,
       last_saved_path: None,
       overlay_mode: "instant".to_string(),
+      cached_bounds: None,
       overlay_window_id: 0,
       pending_annotation: None,
-      pending_annotation_base64: None,
+      pending_annotation_path: None,
       annotation_source_path: None,
       delayed_capture: None,
       is_recording: false,
