@@ -45,17 +45,17 @@ jobs:
         run: npm ci
 
       - name: Build overlay daemon
-        run: cargo build --release --manifest-path overlay/Cargo.toml ${{ matrix.args }}
-
-      - name: Copy overlay binary (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: cp overlay/target/aarch64-apple-darwin/release/quickshotter-overlay src-tauri/target/aarch64-apple-darwin/release/ 2>/dev/null || true
-
-      - name: Copy overlay binary (Windows)
-        if: matrix.platform == 'windows-latest'
+        shell: bash
         run: |
-          mkdir -p src-tauri/target/release/
-          cp overlay/target/release/quickshotter-overlay.exe src-tauri/target/release/ 2>/dev/null || true
+          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
+            cargo build --release --manifest-path overlay/Cargo.toml --target aarch64-apple-darwin
+            mkdir -p src-tauri/target/aarch64-apple-darwin/release/
+            cp overlay/target/aarch64-apple-darwin/release/quickshotter-overlay src-tauri/target/aarch64-apple-darwin/release/ || true
+          else
+            cargo build --release --manifest-path overlay/Cargo.toml
+            mkdir -p src-tauri/target/release/
+            cp overlay/target/release/quickshotter-overlay.exe src-tauri/target/release/ || true
+          fi
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6.1
