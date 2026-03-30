@@ -78,6 +78,9 @@ pub fn run() {
       commands::get_overlay_mode,
       commands::get_overlay_origin,
       commands::get_pending_screenshot,
+      commands::request_permission,
+      commands::check_permission,
+      commands::complete_onboarding,
       commands::get_config,
       commands::save_config,
       commands::get_default_config,
@@ -108,11 +111,28 @@ pub fn run() {
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
 
-      // Proactively request screen recording permission on macOS.
-      // This triggers the system prompt on first launch so the user doesn't
-      // hit a confusing failure on their first capture attempt.
+      // macOS: show welcome/onboarding window if permission not yet granted.
+      // On subsequent launches (or if already granted), skip it entirely.
       #[cfg(target_os = "macos")]
-      capture::request_screen_recording_permission();
+      {
+        let onboarded = app.path().app_config_dir().ok()
+          .map(|d| d.join(".onboarded").exists())
+          .unwrap_or(false);
+        let has_permission = capture::has_screen_recording_permission();
+
+        if !onboarded && !has_permission {
+          // Show welcome window — don't trigger system dialog yet,
+          // let the user click the button in our guided flow.
+          use tauri::{WebviewUrl, WebviewWindowBuilder};
+          WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
+            .title("Welcome to QuickShotter")
+            .inner_size(440.0, 460.0)
+            .resizable(false)
+            .center()
+            .build()
+            .ok();
+        }
+      }
 
       // Sync autostart registry/launch-agent to match config on every launch.
       // Covers the case where the entry was removed externally (reinstall,

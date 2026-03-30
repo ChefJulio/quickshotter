@@ -59,6 +59,36 @@ pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
     .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
 }
 
+/// Request screen recording permission (triggers system dialog or opens Settings).
+#[tauri::command]
+pub fn request_permission() {
+  #[cfg(target_os = "macos")]
+  {
+    capture::request_screen_recording_permission();
+    capture::open_screen_recording_settings();
+  }
+}
+
+/// Check if screen recording permission is currently granted.
+#[tauri::command]
+pub fn check_permission() -> bool {
+  #[cfg(target_os = "macos")]
+  { capture::has_screen_recording_permission() }
+  #[cfg(not(target_os = "macos"))]
+  { true }
+}
+
+/// Mark onboarding as complete so the welcome window never shows again.
+#[tauri::command]
+pub fn complete_onboarding(app: AppHandle) {
+  let config_dir = app.path().app_config_dir().ok();
+  if let Some(dir) = config_dir {
+    let flag = dir.join(".onboarded");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(flag, "1");
+  }
+}
+
 // -- Shared capture finalization --
 
 /// Copy image to clipboard, save to disk, update history, refresh tray, and

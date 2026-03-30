@@ -14,6 +14,7 @@ export default defineConfig(async () => ({
         annotation: resolve(__dirname, "annotation.html"),
         "recording-indicator": resolve(__dirname, "recording-indicator.html"),
         countdown: resolve(__dirname, "countdown.html"),
+        welcome: resolve(__dirname, "welcome.html"),
       },
     },
   },
