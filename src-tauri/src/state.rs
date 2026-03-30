@@ -16,6 +16,8 @@ pub struct AppState {
   pub is_annotating: bool,
   // Only used in "freeze" / "window" capture modes
   pub pending_screenshot: Option<RgbaImage>,
+  // Base64-encoded JPEG of pending screenshot (macOS webview overlay)
+  pub pending_screenshot_base64: Option<String>,
   // Last saved file, used for notification click -> reveal in explorer
   pub last_saved_path: Option<PathBuf>,
   // Overlay mode: "live", "freeze", or "window"
@@ -48,6 +50,7 @@ impl AppState {
       is_capturing: false,
       is_annotating: false,
       pending_screenshot: None,
+      pending_screenshot_base64: None,
       last_saved_path: None,
       overlay_mode: "live".to_string(),
       cached_bounds: None,

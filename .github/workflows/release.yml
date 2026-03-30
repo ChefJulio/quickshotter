@@ -15,8 +15,6 @@ jobs:
             args: ''
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
 
@@ -36,7 +34,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -45,6 +43,19 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build overlay daemon
+        run: cargo build --release --manifest-path overlay/Cargo.toml ${{ matrix.args }}
+
+      - name: Copy overlay binary (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: cp overlay/target/aarch64-apple-darwin/release/quickshotter-overlay src-tauri/target/aarch64-apple-darwin/release/ 2>/dev/null || true
+
+      - name: Copy overlay binary (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          mkdir -p src-tauri/target/release/
+          cp overlay/target/release/quickshotter-overlay.exe src-tauri/target/release/ 2>/dev/null || true
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6.1
@@ -61,8 +72,7 @@ jobs:
             | Platform | File |
             |----------|------|
             | **Windows** (64-bit) | `_x64-setup.exe` |
-            | **macOS** (Apple Silicon - M1/M2/M3/M4) | `_aarch64.dmg` |
-            | **macOS** (Intel) | `_x64.dmg` |
+            | **macOS** (Apple Silicon) | `_aarch64.dmg` |
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
@@ -88,7 +98,6 @@ jobs:
           |----------|-----------|
           | **Windows** (64-bit) | [QuickShotter_${VERSION}_x64-setup.exe](${BASE}/QuickShotter_${VERSION}_x64-setup.exe) |
           | **macOS** (Apple Silicon) | [QuickShotter_${VERSION}_aarch64.dmg](${BASE}/QuickShotter_${VERSION}_aarch64.dmg) |
-          | **macOS** (Intel) | [QuickShotter_${VERSION}_x64.dmg](${BASE}/QuickShotter_${VERSION}_x64.dmg) |
 
           ### macOS: first launch
 

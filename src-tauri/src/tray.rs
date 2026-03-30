@@ -10,10 +10,15 @@ use crate::state::{AppState, LockRecover};
 
 fn format_hotkey_display(raw: &str) -> String {
   #[cfg(target_os = "macos")]
-  let result = raw.replace("CmdOrCtrl", "Cmd");
+  let result = raw
+    .replace("CmdOrCtrl", "⌘")
+    .replace("Alt", "⌥")
+    .replace("Shift", "⇧")
+    .replace("Backquote", "`")
+    .replace("+", "");
   #[cfg(not(target_os = "macos"))]
-  let result = raw.replace("CmdOrCtrl", "Ctrl");
-  result.replace("Backquote", "`")
+  let result = raw.replace("CmdOrCtrl", "Ctrl").replace("Backquote", "`");
+  result
 }
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {

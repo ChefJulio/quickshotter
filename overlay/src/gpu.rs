@@ -21,11 +21,17 @@ impl GpuContext {
   /// Initialize wgpu: adapter, device, shader, pipeline layout.
   /// This is the expensive part (~200-500ms first time) that we pre-warm.
   pub fn init() -> Result<Self, String> {
-    // Use Vulkan on Windows — D3D12 only supports Opaque alpha mode,
+    // Windows: use Vulkan — D3D12 only supports Opaque alpha mode,
     // which prevents transparent compositing with the desktop.
     // Vulkan supports PreMultiplied alpha via DWM on Windows 10+.
+    // macOS: use Metal (the only native GPU API).
+    let backends = if cfg!(target_os = "macos") {
+      wgpu::Backends::METAL
+    } else {
+      wgpu::Backends::VULKAN
+    };
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-      backends: wgpu::Backends::VULKAN,
+      backends,
       ..Default::default()
     });
 

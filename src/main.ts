@@ -74,11 +74,13 @@ const isMac = navigator.platform.toUpperCase().includes('MAC');
 
 function formatHotkeyDisplay(raw: string): string {
   return raw
-    .replace(/CmdOrCtrl/g, isMac ? 'Cmd' : 'Ctrl')
+    .replace(/CmdOrCtrl/g, isMac ? '⌘' : 'Ctrl')
+    .replace(/Alt/g, isMac ? '⌥' : 'Alt')
+    .replace(/Shift/g, isMac ? '⇧' : 'Shift')
     .replace(/Backquote/g, '`')
     .split('+')
     .map(p => p.charAt(0).toUpperCase() + p.slice(1))
-    .join(' + ');
+    .join(isMac ? '' : ' + ');
 }
 
 function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onComplete?: () => void): HotkeyState {
@@ -124,8 +126,11 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onCom
     // Require at least one modifier
     if (parts.length === 0) return;
 
-    // Convert key to Tauri format
-    const keyStr = keyToTauriFormat(e.key);
+    // Convert key to Tauri format.
+    // Use e.code (physical key) as primary, falling back to e.key.
+    // On macOS, Option+key produces composed/dead characters in e.key
+    // (e.g. Option+` gives "Dead" instead of "`"), so e.code is reliable.
+    const keyStr = keyCodeToTauriFormat(e.code) ?? keyToTauriFormat(e.key);
     if (!keyStr) return;
 
     parts.push(keyStr);
@@ -138,6 +143,35 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onCom
   });
 
   return state;
+}
+
+function keyCodeToTauriFormat(code: string): string | null {
+  // Map physical key codes to Tauri shortcut names.
+  // Letters: KeyA-KeyZ
+  const letterMatch = code.match(/^Key([A-Z])$/);
+  if (letterMatch) return letterMatch[1];
+  // Digits: Digit0-Digit9
+  const digitMatch = code.match(/^Digit([0-9])$/);
+  if (digitMatch) return digitMatch[1];
+  // Function keys: F1-F12
+  if (/^F\d+$/.test(code)) return code;
+
+  const codeMap: Record<string, string> = {
+    'Backquote': 'Backquote',
+    'Space': 'Space', 'Tab': 'Tab', 'Enter': 'Enter',
+    'Backspace': 'Backspace', 'Delete': 'Delete',
+    'Home': 'Home', 'End': 'End',
+    'PageUp': 'PageUp', 'PageDown': 'PageDown',
+    'ArrowUp': 'Up', 'ArrowDown': 'Down',
+    'ArrowLeft': 'Left', 'ArrowRight': 'Right',
+    'Insert': 'Insert',
+    'Minus': 'Minus', 'Equal': 'Equal',
+    'BracketLeft': 'BracketLeft', 'BracketRight': 'BracketRight',
+    'Backslash': 'Backslash', 'Semicolon': 'Semicolon',
+    'Quote': 'Quote', 'Comma': 'Comma',
+    'Period': 'Period', 'Slash': 'Slash',
+  };
+  return codeMap[code] || null;
 }
 
 function keyToTauriFormat(key: string): string | null {

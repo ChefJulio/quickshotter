@@ -22,8 +22,11 @@ pub fn create_overlay_window(
   // Freeze mode: opaque window (wgpu renders to surface directly).
   let transparent = mode != CaptureMode::Freeze;
 
-  // Freeze mode: start hidden, show after first GPU frame to avoid white flash.
-  // Live modes: must be visible immediately for layered window APIs to work.
+  // GPU-rendered modes start hidden, shown after first frame to avoid white flash.
+  // On Windows, live modes use layered window APIs that need immediate visibility.
+  #[cfg(target_os = "macos")]
+  let start_visible = false;
+  #[cfg(not(target_os = "macos"))]
   let start_visible = mode != CaptureMode::Freeze;
 
   let attrs = WindowAttributes::default()
@@ -44,7 +47,49 @@ pub fn create_overlay_window(
   #[cfg(target_os = "windows")]
   apply_win32_fixups(&window, mode);
 
+  #[cfg(target_os = "macos")]
+  apply_macos_fixups(&window);
+
   Ok(window)
+}
+
+/// macOS: ensure the overlay window can receive mouse/key events.
+/// Borderless transparent windows need explicit activation + key window status.
+#[cfg(target_os = "macos")]
+fn apply_macos_fixups(window: &Window) {
+  use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+  use objc2::runtime::AnyObject;
+  use objc2::msg_send;
+  use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+  let handle = match window.window_handle() {
+    Ok(h) => h,
+    Err(_) => return,
+  };
+
+  let ns_view = match handle.as_raw() {
+    RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut AnyObject,
+    _ => return,
+  };
+
+  unsafe {
+    // Get NSWindow from NSView
+    let ns_window: *mut AnyObject = msg_send![ns_view, window];
+    if ns_window.is_null() { return; }
+
+    // Activate the application so it can receive events
+    let mtm = objc2::MainThreadMarker::new_unchecked();
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    app.activate();
+
+    // Make the window accept keyboard and mouse events
+    let _: () = msg_send![ns_window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+    // Set window level above everything (NSStatusWindowLevel = 25)
+    let _: () = msg_send![ns_window, setLevel: 25_i64];
+    // Accept mouse events even when app is not frontmost
+    let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: true];
+  }
 }
 
 /// Win32-specific window style adjustments.

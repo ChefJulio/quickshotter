@@ -49,6 +49,16 @@ pub fn get_overlay_origin() -> Result<(i32, i32), AppError> {
   Ok((bounds.x, bounds.y))
 }
 
+/// Return the pending screenshot as base64 JPEG for the webview overlay (macOS).
+#[tauri::command]
+pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
+  let s = app.state::<Mutex<AppState>>();
+  let mut state = s.lock_or_recover();
+  state.pending_screenshot_base64
+    .take()
+    .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
+}
+
 // -- Shared capture finalization --
 
 /// Copy image to clipboard, save to disk, update history, refresh tray, and
@@ -486,18 +496,8 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
 }
 
 async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
-  // On macOS, check permission before attempting capture to avoid triggering
-  // the system dialog while also trying to capture.
   #[cfg(target_os = "macos")]
-  if !capture::has_screen_recording_permission() {
-    capture::request_screen_recording_permission();
-    use tauri_plugin_notification::NotificationExt;
-    app.notification()
-      .builder()
-      .title("Screen Recording Permission Required")
-      .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
-      .show()
-      .ok();
+  if !capture::ensure_screen_recording_permission(app) {
     return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
   }
 
@@ -513,13 +513,7 @@ async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto
   // capture still returned empty (can happen after app updates on some macOS versions).
   #[cfg(target_os = "macos")]
   if capture::is_likely_blank(&screen.image) {
-    use tauri_plugin_notification::NotificationExt;
-    app.notification()
-      .builder()
-      .title("Screen Recording Permission Required")
-      .body("Grant permission in System Settings > Privacy & Security > Screen Recording, then restart QuickShotter")
-      .show()
-      .ok();
+    capture::notify_blank_capture(app);
     return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
   }
 

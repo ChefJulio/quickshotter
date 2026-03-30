@@ -77,6 +77,7 @@ pub fn run() {
       commands::cancel_capture,
       commands::get_overlay_mode,
       commands::get_overlay_origin,
+      commands::get_pending_screenshot,
       commands::get_config,
       commands::save_config,
       commands::get_default_config,
@@ -106,6 +107,12 @@ pub fn run() {
       let launch_on_startup = config.launch_on_startup;
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
+
+      // Proactively request screen recording permission on macOS.
+      // This triggers the system prompt on first launch so the user doesn't
+      // hit a confusing failure on their first capture attempt.
+      #[cfg(target_os = "macos")]
+      capture::request_screen_recording_permission();
 
       // Sync autostart registry/launch-agent to match config on every launch.
       // Covers the case where the entry was removed externally (reinstall,

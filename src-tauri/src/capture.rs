@@ -481,6 +481,7 @@ fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
 
 /// Check if the app has screen recording permission on macOS.
 /// Uses CGPreflightScreenCaptureAccess (macOS 10.15+) to check without prompting.
+/// Note: unreliable for unsigned dev builds — may return false even when granted.
 #[cfg(target_os = "macos")]
 pub fn has_screen_recording_permission() -> bool {
   extern "C" {
@@ -492,11 +493,61 @@ pub fn has_screen_recording_permission() -> bool {
 /// Request screen recording permission on macOS.
 /// Triggers the system permission dialog on first call.
 #[cfg(target_os = "macos")]
-pub fn request_screen_recording_permission() {
+pub fn request_screen_recording_permission() -> bool {
   extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
   }
-  unsafe { CGRequestScreenCaptureAccess(); }
+  unsafe { CGRequestScreenCaptureAccess() }
+}
+
+/// Open macOS System Settings to the Screen Recording permission pane.
+#[cfg(target_os = "macos")]
+pub fn open_screen_recording_settings() {
+  let _ = std::process::Command::new("open")
+    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    .spawn();
+}
+
+/// Unified permission check for capture paths on macOS.
+/// Returns true if capture should proceed, false if permission is missing.
+/// Handles the user-facing notification and opens Settings when needed.
+#[cfg(target_os = "macos")]
+pub fn ensure_screen_recording_permission(app: &tauri::AppHandle) -> bool {
+  // First try the preflight check (reliable for signed production builds)
+  if has_screen_recording_permission() {
+    return true;
+  }
+
+  // Request permission — triggers system dialog on first call
+  if request_screen_recording_permission() {
+    return true;
+  }
+
+  // Permission denied — show notification and open Settings
+  use tauri_plugin_notification::NotificationExt;
+  app.notification()
+    .builder()
+    .title("QuickShotter needs Screen Recording access")
+    .body("Click to open Settings and enable QuickShotter, then try again")
+    .show()
+    .ok();
+  open_screen_recording_settings();
+  false
+}
+
+/// Fallback: show permission notification when a blank capture is detected.
+/// This catches edge cases where preflight passed but capture is still empty
+/// (e.g. after app updates or on certain macOS versions).
+#[cfg(target_os = "macos")]
+pub fn notify_blank_capture(app: &tauri::AppHandle) {
+  use tauri_plugin_notification::NotificationExt;
+  app.notification()
+    .builder()
+    .title("Screen Recording permission needed")
+    .body("QuickShotter captured a blank screen. Open Settings and re-enable QuickShotter under Screen Recording.")
+    .show()
+    .ok();
+  open_screen_recording_settings();
 }
 
 /// Check if a captured image is likely blank (all black pixels).

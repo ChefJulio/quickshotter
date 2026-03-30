@@ -27,7 +27,7 @@ use highlight::HighlightBorder;
 use interaction::{Interaction, MonitorRect, Phase, Rect};
 use live_renderer::LiveRenderer;
 use protocol::{CaptureMode, CaptureRequest, Command, OverlayResult};
-use renderer::FreezeRenderer;
+use renderer::{FreezeRenderer, LiveGpuRenderer};
 use window_detect::WindowDetector;
 
 enum StdinMsg {
@@ -103,7 +103,9 @@ fn stdin_reader(tx: mpsc::Sender<StdinMsg>, proxy: winit::event_loop::EventLoopP
 
 enum ActiveRenderer {
   Freeze(FreezeRenderer),
+  #[cfg(target_os = "windows")]
   Live(LiveRenderer),
+  LiveGpu(LiveGpuRenderer),
   /// Window mode: no per-pixel rendering, just a nearly-invisible overlay
   /// that captures mouse events. The highlight is drawn via separate border windows.
   WindowMode,
@@ -195,9 +197,9 @@ impl OverlayApp {
         }
       }
     } else {
-      // All live modes: layered window with per-pixel alpha via UpdateLayeredWindow.
-      // Window/SelectScreen use alpha=20 (barely visible, still catches mouse events).
-      // Region/Record/OCR use alpha=77 (visible dark overlay).
+      // Live modes: platform-specific rendering.
+      // Windows: Win32 layered window with per-pixel alpha via UpdateLayeredWindow.
+      // macOS: GPU-based transparent wgpu surface with Metal backend.
       #[cfg(target_os = "windows")]
       {
         let hwnd = window::get_hwnd(&win).unwrap_or(0);
@@ -210,9 +212,18 @@ impl OverlayApp {
       }
       #[cfg(not(target_os = "windows"))]
       {
-        eprintln!("[overlay-daemon] live mode not implemented on this platform");
-        OverlayResult::Cancelled.send();
-        return;
+        let dim_alpha = match mode {
+          CaptureMode::Window | CaptureMode::SelectScreen => 0.08,
+          _ => 0.3,
+        };
+        match LiveGpuRenderer::new(&self.gpu, Arc::clone(&win), dim_alpha) {
+          Ok(r) => ActiveRenderer::LiveGpu(r),
+          Err(e) => {
+            eprintln!("[overlay-daemon] live GPU renderer failed: {e}");
+            OverlayResult::Cancelled.send();
+            return;
+          }
+        }
       }
     };
 
@@ -251,12 +262,15 @@ impl OverlayApp {
       highlight: highlight_border,
     };
 
-    // Freeze mode: render first frame then show window (no white flash).
-    // Live modes are already visible — layered windows need it for events.
-    if mode == CaptureMode::Freeze {
+    // GPU-rendered modes: render first frame then show window (no white flash).
+    // On Windows, live modes use layered windows that are already visible.
+    let needs_gpu_show = mode == CaptureMode::Freeze
+      || matches!(self.state, AppState::Active { renderer: ActiveRenderer::LiveGpu(_), .. });
+    if needs_gpu_show {
       self.render_frame();
       if let AppState::Active { window, .. } = &self.state {
         window.set_visible(true);
+        window.focus_window();
         window.request_redraw();
       }
     }
@@ -327,7 +341,9 @@ impl OverlayApp {
     if let AppState::Active { renderer, interaction, .. } = &mut self.state {
       match renderer {
         ActiveRenderer::Freeze(r) => r.render(&self.gpu, interaction),
+        #[cfg(target_os = "windows")]
         ActiveRenderer::Live(r) => r.render(interaction),
+        ActiveRenderer::LiveGpu(r) => r.render(&self.gpu, interaction),
         ActiveRenderer::WindowMode => {} // highlight handled by update_window_detection
       }
     }
@@ -557,6 +573,10 @@ impl ApplicationHandler<()> for OverlayApp {
         }
 
         WindowEvent::Focused(false) => {
+          // On macOS, borderless overlay windows may not receive focus
+          // immediately, causing a spurious blur event. Only cancel if
+          // the window has been focused at least once (i.e. user tabbed away).
+          #[cfg(not(target_os = "macos"))]
           if interaction.phase == Phase::Idle {
             interaction.cancel();
             needs_finish = true;
