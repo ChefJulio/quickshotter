@@ -60,11 +60,16 @@ pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
 }
 
 /// Request screen recording permission (triggers system dialog or opens Settings).
+/// The CGRequestScreenCaptureAccess call adds the app to the Screen Recording list,
+/// then we open Settings so the user just needs to toggle it on.
 #[tauri::command]
 pub fn request_permission() {
   #[cfg(target_os = "macos")]
   {
+    // This adds the app to the Screen Recording list in System Settings
     capture::request_screen_recording_permission();
+    // Brief delay so macOS registers the app before we open Settings
+    std::thread::sleep(std::time::Duration::from_millis(500));
     capture::open_screen_recording_settings();
   }
 }
