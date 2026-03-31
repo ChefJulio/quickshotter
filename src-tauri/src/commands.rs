@@ -59,13 +59,19 @@ pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
     .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
 }
 
-/// Open Screen Recording settings so the user can toggle QuickShotter on.
-/// We skip CGRequestScreenCaptureAccess to avoid the ugly system dialog —
-/// the signed .app already appears in the list automatically.
+/// Request screen recording permission and open Settings.
+/// CGRequestScreenCaptureAccess adds the app to the Screen Recording list
+/// and shows a system dialog. Then we open Settings so the user can toggle it on.
+/// Only called when user clicks the button in the welcome window, never on startup.
 #[tauri::command]
 pub fn request_permission() {
   #[cfg(target_os = "macos")]
-  capture::open_screen_recording_settings();
+  {
+    capture::request_screen_recording_permission();
+    // Small delay so the app registers in the list before Settings opens
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    capture::open_screen_recording_settings();
+  }
 }
 
 /// Check if screen recording permission is currently granted.
