@@ -44,6 +44,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Apple certificate (macOS)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          # Decode certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          security import certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          # Clean up
+          rm certificate.p12
+
       - name: Build overlay daemon
         shell: bash
         run: |
@@ -63,6 +88,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Hunter Graves (3G9C6KNHVR)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'QuickShotter ${{ github.ref_name }}'
@@ -98,15 +129,6 @@ jobs:
           |----------|-----------|
           | **Windows** (64-bit) | [QuickShotter_${VERSION}_x64-setup.exe](${BASE}/QuickShotter_${VERSION}_x64-setup.exe) |
           | **macOS** (Apple Silicon) | [QuickShotter_${VERSION}_aarch64.dmg](${BASE}/QuickShotter_${VERSION}_aarch64.dmg) |
-
-          ### macOS: first launch
-
-          The app is not notarized yet, so macOS will block it on first open. To fix this:
-          1. Open the .dmg and drag QuickShotter to Applications
-          2. **Right-click** the app and select **Open** (don't double-click)
-          3. Click **Open** in the dialog that appears
-
-          If that doesn't work: System Settings > Privacy & Security > scroll down and click **Open Anyway**.
 
           ---
 
