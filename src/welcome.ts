@@ -26,8 +26,9 @@ async function loadHotkey() {
 
 btn.addEventListener('click', async () => {
   btn.disabled = true;
+  btn.textContent = 'Opening Settings...';
 
-  // Request permission — triggers system dialog or opens settings
+  // Open Screen Recording settings directly (no system dialog)
   try {
     await invoke('request_permission');
   } catch {}
@@ -36,7 +37,8 @@ btn.addEventListener('click', async () => {
   step1.className = 'step done';
   step1.querySelector('.step-num')!.textContent = '\u2713';
   step2.className = 'step active';
-  status.textContent = 'Waiting for permission...';
+  btn.textContent = 'Waiting...';
+  status.textContent = 'Toggle QuickShotter ON in the Settings window, then come back here';
   status.className = 'status checking';
 
   // Start polling for permission
@@ -58,7 +60,7 @@ function startPolling() {
     } catch {}
   }, 1000);
 
-  // Stop polling after 2 minutes
+  // After 2 minutes, offer to retry
   setTimeout(() => {
     if (polling) {
       clearInterval(interval);
@@ -70,6 +72,7 @@ function startPolling() {
       btn.onclick = async () => {
         try { await invoke('request_permission'); } catch {}
         btn.disabled = true;
+        btn.textContent = 'Waiting...';
         startPolling();
       };
     }
@@ -77,22 +80,49 @@ function startPolling() {
 }
 
 async function onPermissionGranted() {
+  // Mark all steps done
+  step1.className = 'step done';
+  step1.querySelector('.step-num')!.textContent = '\u2713';
   step2.className = 'step done';
   step2.querySelector('.step-num')!.textContent = '\u2713';
-  step3.className = 'step active';
+  step3.className = 'step done';
+  step3.querySelector('.step-num')!.textContent = '\u2713';
 
+  status.textContent = '';
+  status.className = 'status granted';
+
+  // Replace button area with two options
   btn.textContent = 'Start Capturing';
   btn.className = 'btn btn-success';
   btn.disabled = false;
-  status.textContent = '\u2713 Screen recording access granted';
-  status.className = 'status granted';
-
   btn.onclick = async () => {
-    // Mark onboarding complete so we never show this again
     try { await invoke('complete_onboarding'); } catch {}
     const win = getCurrentWindow();
     await win.close();
   };
+
+  // Add "Customize Hotkeys" link below the button
+  if (!document.getElementById('settings-link')) {
+    const link = document.createElement('button');
+    link.id = 'settings-link';
+    link.textContent = 'Customize Hotkeys';
+    link.className = 'btn-link';
+    link.onclick = async () => {
+      try {
+        await invoke('complete_onboarding');
+        // Open settings window to shortcuts tab
+        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const settingsWin = await WebviewWindow.getByLabel('settings');
+        if (settingsWin) {
+          await settingsWin.show();
+          await settingsWin.setFocus();
+        }
+      } catch {}
+      const win = getCurrentWindow();
+      await win.close();
+    };
+    btn.parentElement!.appendChild(link);
+  }
 }
 
 // Check on load — maybe permission was already granted

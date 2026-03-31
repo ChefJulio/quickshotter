@@ -133,6 +133,20 @@
         display: inline-block;
         margin-right: 4px;
       }
+      .btn-link {
+        display: block;
+        margin: 12px auto 0;
+        background: none;
+        border: none;
+        color: #60a5fa;
+        font-size: 13px;
+        cursor: pointer;
+        padding: 4px 8px;
+      }
+      .btn-link:hover {
+        color: #93bbfc;
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
@@ -155,19 +169,19 @@
         <div class="step-num">2</div>
         <div class="step-text">
           <h3>Toggle it on</h3>
-          <p>System Settings will open. Find <strong>QuickShotter</strong> in the list and toggle it <strong>ON</strong>.</p>
+          <p>System Settings will open. Find <strong>QuickShotter</strong> in the list and toggle it <strong>ON</strong>, then come back here.</p>
         </div>
       </div>
 
       <div class="step" id="step3">
         <div class="step-num">3</div>
         <div class="step-text">
-          <h3>You're all set</h3>
-          <p>Use <span id="hotkey-hint">⌥`</span> to capture a region anytime.</p>
+          <h3>You're all set!</h3>
+          <p>Press <span id="hotkey-hint">⌥`</span> anytime to capture a region. You can change hotkeys in Settings.</p>
         </div>
       </div>
 
-      <button class="btn btn-primary" id="grant-btn">Grant Access</button>
+      <button class="btn btn-primary" id="grant-btn">Open Settings</button>
       <div class="status" id="status"></div>
     </div>
   </body>

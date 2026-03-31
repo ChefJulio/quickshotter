@@ -513,22 +513,17 @@ pub fn open_screen_recording_settings() {
 /// Handles the user-facing notification and opens Settings when needed.
 #[cfg(target_os = "macos")]
 pub fn ensure_screen_recording_permission(app: &tauri::AppHandle) -> bool {
-  // First try the preflight check (reliable for signed production builds)
   if has_screen_recording_permission() {
     return true;
   }
 
-  // Request permission — triggers system dialog on first call
-  if request_screen_recording_permission() {
-    return true;
-  }
-
-  // Permission denied — show notification and open Settings
+  // Permission not granted — show notification and open Settings directly.
+  // We skip CGRequestScreenCaptureAccess to avoid the system dialog popup.
   use tauri_plugin_notification::NotificationExt;
   app.notification()
     .builder()
     .title("QuickShotter needs Screen Recording access")
-    .body("Click to open Settings and enable QuickShotter, then try again")
+    .body("Enable QuickShotter in Screen Recording settings, then try again")
     .show()
     .ok();
   open_screen_recording_settings();
