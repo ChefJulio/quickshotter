@@ -118,9 +118,8 @@ pub fn run() {
         let onboarded = app.path().app_config_dir().ok()
           .map(|d| d.join(".onboarded").exists())
           .unwrap_or(false);
-        let has_permission = capture::has_screen_recording_permission();
 
-        if !onboarded && !has_permission {
+        if !onboarded {
           // Show welcome window — don't trigger system dialog yet,
           // let the user click the button in our guided flow.
           use tauri::{WebviewUrl, WebviewWindowBuilder};
