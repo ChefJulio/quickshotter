@@ -1,13 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-const btn = document.getElementById('grant-btn') as HTMLButtonElement;
-const status = document.getElementById('status')!;
-const step1 = document.getElementById('step1')!;
-const step2 = document.getElementById('step2')!;
-const step3 = document.getElementById('step3')!;
-const hotkeyDisplay = document.getElementById('hotkey-display')!;
-
 let polling = false;
 
 const keyLabels: Record<string, string> = {
@@ -17,14 +10,10 @@ const keyLabels: Record<string, string> = {
   'Backquote': '`',
 };
 
-// Render hotkey as visual keycaps
 function renderKeycaps(raw: string) {
-  const parts = raw.split('+');
-  hotkeyDisplay.innerHTML = parts
-    .map(p => {
-      const label = keyLabels[p] || p;
-      return `<span class="keycap">${label}</span>`;
-    })
+  const el = document.getElementById('hotkey-display')!;
+  el.innerHTML = raw.split('+')
+    .map(p => `<span class="keycap">${keyLabels[p] || p}</span>`)
     .join(' ');
 }
 
@@ -35,22 +24,30 @@ async function loadHotkey() {
   } catch {}
 }
 
-btn.addEventListener('click', async () => {
+function closeWindow() {
+  getCurrentWindow().destroy().catch(() => {
+    // Fallback: hide if destroy fails
+    getCurrentWindow().hide().catch(() => {});
+  });
+}
 
-  // Trigger system permission dialog (adds QuickShotter to the list)
-  try {
-    await invoke('request_permission');
-  } catch {}
+function onPermissionGranted() {
+  document.getElementById('step1')!.className = 'step done';
+  document.getElementById('step1')!.querySelector('.step-num')!.textContent = '\u2713';
+  document.getElementById('step2')!.className = 'step done';
+  document.getElementById('step2')!.querySelector('.step-num')!.textContent = '\u2713';
+  document.getElementById('step3')!.className = 'step done';
+  document.getElementById('step3')!.querySelector('.step-num')!.textContent = '\u2713';
 
-  // Move to step 2
-  step1.className = 'step done';
-  step1.querySelector('.step-num')!.textContent = '\u2713';
-  step2.className = 'step active';
-  status.textContent = 'Toggle QuickShotter ON in Settings, then come back here';
-  status.className = 'status checking';
+  document.getElementById('status')!.textContent = '';
+  const hint = document.getElementById('menu-hint');
+  if (hint) hint.style.display = 'block';
 
-  startPolling();
-});
+  // Swap buttons
+  document.getElementById('grant-btn')!.style.display = 'none';
+  document.getElementById('start-btn')!.style.display = '';
+  document.getElementById('settings-btn')!.style.display = '';
+}
 
 function startPolling() {
   if (polling) return;
@@ -71,56 +68,43 @@ function startPolling() {
     if (polling) {
       clearInterval(interval);
       polling = false;
-      status.textContent = 'Still waiting? Make sure QuickShotter is toggled ON in Settings.';
-      btn.textContent = 'Try Again';
-      btn.disabled = false;
-      btn.className = 'btn btn-primary';
-      btn.onclick = async () => {
-        try { await invoke('request_permission'); } catch {}
-        btn.disabled = true;
-        btn.textContent = 'Waiting...';
-        startPolling();
-      };
+      document.getElementById('status')!.textContent =
+        'Still waiting? Make sure QuickShotter is toggled ON in Settings.';
     }
   }, 120000);
 }
 
-async function onPermissionGranted() {
-  step1.className = 'step done';
-  step1.querySelector('.step-num')!.textContent = '\u2713';
-  step2.className = 'step done';
-  step2.querySelector('.step-num')!.textContent = '\u2713';
-  step3.className = 'step done';
-  step3.querySelector('.step-num')!.textContent = '\u2713';
+window.addEventListener('DOMContentLoaded', async () => {
+  loadHotkey();
 
-  status.textContent = '';
-  status.className = 'status granted';
+  // Grant Access button
+  document.getElementById('grant-btn')!.addEventListener('click', async () => {
+    try { await invoke('request_permission'); } catch {}
 
-  // Show menu bar hint
-  const hint = document.getElementById('menu-hint');
-  if (hint) hint.style.display = 'block';
+    document.getElementById('step1')!.className = 'step done';
+    document.getElementById('step1')!.querySelector('.step-num')!.textContent = '\u2713';
+    document.getElementById('step2')!.className = 'step active';
+    document.getElementById('status')!.textContent =
+      'Toggle QuickShotter ON in Settings, then come back here';
+    document.getElementById('status')!.className = 'status checking';
 
-  // Replace Grant Access button with completion buttons
-  const btnRow = document.getElementById('btn-row')!;
-  btnRow.innerHTML = `
-    <button class="btn btn-success" id="start-btn">Start Capturing</button>
-    <button class="btn btn-secondary" id="settings-btn">Settings</button>
-  `;
-
-  document.getElementById('start-btn')!.addEventListener('click', async () => {
-    await invoke('complete_onboarding').catch(() => {});
-    await getCurrentWindow().destroy().catch(() => {});
+    startPolling();
   });
 
+  // Start Capturing button
+  document.getElementById('start-btn')!.addEventListener('click', async () => {
+    await invoke('complete_onboarding').catch(() => {});
+    closeWindow();
+  });
+
+  // Settings button
   document.getElementById('settings-btn')!.addEventListener('click', async () => {
     await invoke('complete_onboarding').catch(() => {});
     await invoke('show_settings').catch(() => {});
-    await getCurrentWindow().destroy().catch(() => {});
+    closeWindow();
   });
-}
 
-window.addEventListener('DOMContentLoaded', async () => {
-  loadHotkey();
+  // Check if already granted on load
   try {
     const granted: boolean = await invoke('check_permission');
     if (granted) {
