@@ -138,33 +138,11 @@ pub fn run() {
             .ok();
         }
 
-        // Monitor permission in background — CGWindowListCopyWindowInfo
-        // is NOT cached per-process, so this reliably detects revocation.
-        let handle = app.handle().clone();
-        std::thread::spawn(move || {
-          let mut had_permission = has_permission;
-          loop {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            let now = capture::has_screen_recording_permission();
-            if had_permission && !now {
-              eprintln!("[permission] revoked — showing welcome window");
-              if let Ok(dir) = handle.path().app_config_dir() {
-                let _ = std::fs::remove_file(dir.join(".onboarded"));
-              }
-              if let Some(existing) = handle.get_webview_window("welcome") {
-                existing.destroy().ok();
-              }
-              use tauri::{WebviewUrl, WebviewWindowBuilder};
-              let _ = WebviewWindowBuilder::new(&handle, "welcome", WebviewUrl::App("welcome.html".into()))
-                .title("Welcome to QuickShotter")
-                .inner_size(440.0, 560.0)
-                .resizable(false)
-                .center()
-                .build();
-            }
-            had_permission = now;
-          }
-        });
+        // Mid-session permission revocation is detected reactively when a
+        // capture returns blank — see notify_blank_capture() in capture.rs.
+        // Background polling doesn't work because CGPreflightScreenCaptureAccess
+        // caches per-process and CGWindowListCopyWindowInfo no longer strips
+        // window names on macOS Tahoe.
       }
 
       // Sync autostart registry/launch-agent to match config on every launch.
