@@ -3629,13 +3629,14 @@ dependencies = [
 
 [[package]]
 name = "quickshotter"
-version = "1.1.9"
+version = "1.2.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
  "cc",
  "chrono",
  "color_quant",
+ "core-foundation 0.9.4",
  "crossbeam-channel",
  "dirs 6.0.0",
  "gif",

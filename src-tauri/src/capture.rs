@@ -480,14 +480,68 @@ fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
 
 
 /// Check if the app has screen recording permission on macOS.
-/// Uses CGPreflightScreenCaptureAccess (macOS 10.15+) to check without prompting.
-/// Note: unreliable for unsigned dev builds — may return false even when granted.
+///
+/// Uses CGWindowListCopyWindowInfo to check if we can see other apps' window
+/// names. When permission is denied, macOS strips kCGWindowName from the
+/// results for windows that don't belong to our app. This check is NOT cached
+/// per-process (unlike CGPreflightScreenCaptureAccess) so it detects
+/// permission changes at runtime.
 #[cfg(target_os = "macos")]
 pub fn has_screen_recording_permission() -> bool {
   extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGWindowListCopyWindowInfo(option: u32, relativeToWindow: u32) -> *const std::ffi::c_void;
+    fn CFArrayGetCount(arr: *const std::ffi::c_void) -> isize;
+    fn CFArrayGetValueAtIndex(arr: *const std::ffi::c_void, idx: isize) -> *const std::ffi::c_void;
+    fn CFDictionaryContainsKey(dict: *const std::ffi::c_void, key: *const std::ffi::c_void) -> bool;
+    fn CFDictionaryGetValue(dict: *const std::ffi::c_void, key: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    fn CFRelease(cf: *const std::ffi::c_void);
+    fn CFStringGetCStringPtr(s: *const std::ffi::c_void, encoding: u32) -> *const std::ffi::c_char;
   }
-  unsafe { CGPreflightScreenCaptureAccess() }
+
+  use core_foundation::string::CFString;
+  use core_foundation::base::TCFType;
+
+  unsafe {
+    // kCGWindowListOptionOnScreenOnly = 1, kCGNullWindowID = 0
+    let info = CGWindowListCopyWindowInfo(1, 0);
+    if info.is_null() {
+      return false;
+    }
+
+    let name_key = CFString::new("kCGWindowName");
+    let owner_key = CFString::new("kCGWindowOwnerName");
+    let count = CFArrayGetCount(info);
+    let mut found = false;
+
+    for i in 0..count {
+      let dict = CFArrayGetValueAtIndex(info, i);
+      if dict.is_null() { continue; }
+
+      // Skip our own windows
+      if CFDictionaryContainsKey(dict, owner_key.as_concrete_TypeRef() as _) {
+        let owner_val = CFDictionaryGetValue(dict, owner_key.as_concrete_TypeRef() as _);
+        if !owner_val.is_null() {
+          // kCFStringEncodingUTF8 = 0x08000100
+          let cstr = CFStringGetCStringPtr(owner_val, 0x08000100);
+          if !cstr.is_null() {
+            let s = std::ffi::CStr::from_ptr(cstr);
+            if s.to_bytes() == b"QuickShotter" {
+              continue;
+            }
+          }
+        }
+      }
+
+      // If any non-owned window has kCGWindowName, we have permission
+      if CFDictionaryContainsKey(dict, name_key.as_concrete_TypeRef() as _) {
+        found = true;
+        break;
+      }
+    }
+
+    CFRelease(info);
+    found
+  }
 }
 
 /// Request screen recording permission on macOS.
