@@ -530,19 +530,32 @@ pub fn ensure_screen_recording_permission(app: &tauri::AppHandle) -> bool {
   false
 }
 
-/// Fallback: show permission notification when a blank capture is detected.
-/// This catches edge cases where preflight passed but capture is still empty
-/// (e.g. after app updates or on certain macOS versions).
+/// Called when a blank capture is detected (permission likely revoked).
+/// Resets onboarding and shows the welcome window so the user gets
+/// guided back through granting permission.
 #[cfg(target_os = "macos")]
 pub fn notify_blank_capture(app: &tauri::AppHandle) {
-  use tauri_plugin_notification::NotificationExt;
-  app.notification()
-    .builder()
-    .title("Screen Recording permission needed")
-    .body("QuickShotter captured a blank screen. Open Settings and re-enable QuickShotter under Screen Recording.")
-    .show()
-    .ok();
-  open_screen_recording_settings();
+  use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+  eprintln!("[permission] blank capture detected — resetting onboarding");
+
+  // Reset onboarding flag
+  if let Ok(dir) = app.path().app_config_dir() {
+    let _ = std::fs::remove_file(dir.join(".onboarded"));
+  }
+
+  // Destroy existing welcome window if any
+  if let Some(existing) = app.get_webview_window("welcome") {
+    existing.destroy().ok();
+  }
+
+  // Show welcome window
+  let _ = WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
+    .title("Welcome to QuickShotter")
+    .inner_size(440.0, 560.0)
+    .resizable(false)
+    .center()
+    .build();
 }
 
 /// Check if a captured image is likely blank (all black pixels).

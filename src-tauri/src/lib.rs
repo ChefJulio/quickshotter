@@ -138,34 +138,6 @@ pub fn run() {
             .ok();
         }
 
-        // Poll permission in background — if revoked while running, show welcome
-        let handle = app.handle().clone();
-        std::thread::spawn(move || {
-          let mut had_permission = has_permission;
-          loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let now = capture::has_screen_recording_permission();
-            if had_permission && !now {
-              // Permission was revoked — reset onboarding and show welcome
-              eprintln!("[permission] revoked — resetting onboarding");
-              if let Ok(dir) = handle.path().app_config_dir() {
-                let _ = std::fs::remove_file(dir.join(".onboarded"));
-              }
-              // Destroy existing welcome window if any
-              if let Some(existing) = handle.get_webview_window("welcome") {
-                existing.destroy().ok();
-              }
-              use tauri::{WebviewUrl, WebviewWindowBuilder};
-              let _ = WebviewWindowBuilder::new(&handle, "welcome", WebviewUrl::App("welcome.html".into()))
-                .title("Welcome to QuickShotter")
-                .inner_size(440.0, 560.0)
-                .resizable(false)
-                .center()
-                .build();
-            }
-            had_permission = now;
-          }
-        });
       }
 
       // Sync autostart registry/launch-agent to match config on every launch.
