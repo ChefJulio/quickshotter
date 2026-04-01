@@ -147,8 +147,13 @@ pub fn run() {
             let now = capture::has_screen_recording_permission();
             if had_permission && !now {
               // Permission was revoked — reset onboarding and show welcome
+              eprintln!("[permission] revoked — resetting onboarding");
               if let Ok(dir) = handle.path().app_config_dir() {
                 let _ = std::fs::remove_file(dir.join(".onboarded"));
+              }
+              // Destroy existing welcome window if any
+              if let Some(existing) = handle.get_webview_window("welcome") {
+                existing.destroy().ok();
               }
               use tauri::{WebviewUrl, WebviewWindowBuilder};
               let _ = WebviewWindowBuilder::new(&handle, "welcome", WebviewUrl::App("welcome.html".into()))
