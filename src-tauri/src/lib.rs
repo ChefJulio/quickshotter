@@ -125,7 +125,7 @@ pub fn run() {
           use tauri::{WebviewUrl, WebviewWindowBuilder};
           WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
             .title("Welcome to QuickShotter")
-            .inner_size(440.0, 460.0)
+            .inner_size(440.0, 560.0)
             .resizable(false)
             .center()
             .build()

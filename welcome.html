@@ -133,6 +133,30 @@
         display: inline-block;
         margin-right: 4px;
       }
+      .keycap {
+        display: inline-block;
+        background: #333;
+        border: 1px solid #555;
+        border-bottom: 3px solid #444;
+        border-radius: 5px;
+        padding: 4px 10px;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 15px;
+        font-weight: 600;
+        color: #e8e8e8;
+        margin: 0 2px;
+        min-width: 24px;
+        text-align: center;
+      }
+      .hotkey-display {
+        margin: 12px 0 4px;
+        text-align: center;
+      }
+      .hotkey-label {
+        font-size: 12px;
+        color: #666;
+        margin-top: 6px;
+      }
       .btn-link {
         display: block;
         margin: 12px auto 0;
@@ -177,7 +201,11 @@
         <div class="step-num">3</div>
         <div class="step-text">
           <h3>You're all set!</h3>
-          <p>Press <span id="hotkey-hint">⌥`</span> anytime to capture a region. You can change hotkeys in Settings.</p>
+          <p>Capture a region anytime with:</p>
+          <div class="hotkey-display" id="hotkey-display">
+            <span class="keycap">⌥ Option</span> <span class="keycap">`</span>
+          </div>
+          <p class="hotkey-label">QuickShotter lives in your menu bar</p>
         </div>
       </div>
 
