@@ -94,11 +94,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     invoke('complete_onboarding');
   });
 
-  // Check if already granted on load
-  try {
-    const granted: boolean = await invoke('check_permission');
-    if (granted) {
-      onPermissionGranted();
-    }
-  } catch {}
+  // Don't auto-check permission on load. The welcome window is only
+  // shown by Rust when permission is missing, so assume it's not granted.
+  // Permission state will be detected via polling after the user clicks
+  // Grant Access. This avoids CGPreflightScreenCaptureAccess returning
+  // stale cached true values right after a macOS-forced relaunch.
 });
