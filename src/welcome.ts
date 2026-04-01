@@ -93,9 +93,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     invoke('complete_onboarding');
   });
 
-  // Don't auto-check permission on load. The welcome window is only
-  // shown by Rust when permission is missing, so assume it's not granted.
-  // Permission state will be detected via polling after the user clicks
-  // Grant Access. This avoids CGPreflightScreenCaptureAccess returning
-  // stale cached true values right after a macOS-forced relaunch.
+  // Start polling immediately — if permission is already granted (e.g.
+  // app relaunched after user toggled it on), the polling will detect it
+  // within 1 second and show the completed state. This is a new process
+  // so CGPreflightScreenCaptureAccess cache is fresh.
+  startPolling();
 });
