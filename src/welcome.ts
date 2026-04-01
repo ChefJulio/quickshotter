@@ -102,38 +102,23 @@ async function onPermissionGranted() {
   const hint = document.getElementById('menu-hint');
   if (hint) hint.style.display = 'block';
 
-  // Replace button area with two side-by-side buttons
+  // Replace Grant Access button with completion buttons
   const btnRow = document.getElementById('btn-row')!;
-  btnRow.innerHTML = '';
+  btnRow.innerHTML = `
+    <button class="btn btn-success" id="start-btn">Start Capturing</button>
+    <button class="btn btn-secondary" id="settings-btn">Settings</button>
+  `;
 
-  const startBtn = document.createElement('button');
-  startBtn.textContent = 'Start Capturing';
-  startBtn.className = 'btn btn-success';
-  startBtn.onclick = async () => {
-    try { await invoke('complete_onboarding'); } catch {}
-    const win = getCurrentWindow();
-    await win.close();
-  };
+  document.getElementById('start-btn')!.addEventListener('click', async () => {
+    try { await invoke('complete_onboarding'); } catch (e) { console.error('complete_onboarding failed:', e); }
+    try { const win = getCurrentWindow(); await win.close(); } catch (e) { console.error('close failed:', e); }
+  });
 
-  const settingsBtn = document.createElement('button');
-  settingsBtn.textContent = 'Settings';
-  settingsBtn.className = 'btn btn-secondary';
-  settingsBtn.onclick = async () => {
-    try {
-      await invoke('complete_onboarding');
-      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      const settingsWin = await WebviewWindow.getByLabel('settings');
-      if (settingsWin) {
-        await settingsWin.show();
-        await settingsWin.setFocus();
-      }
-    } catch {}
-    const win = getCurrentWindow();
-    await win.close();
-  };
-
-  btnRow.appendChild(startBtn);
-  btnRow.appendChild(settingsBtn);
+  document.getElementById('settings-btn')!.addEventListener('click', async () => {
+    try { await invoke('complete_onboarding'); } catch (e) { console.error('complete_onboarding failed:', e); }
+    try { await invoke('show_settings'); } catch (e) { console.error('show_settings failed:', e); }
+    try { const win = getCurrentWindow(); await win.close(); } catch (e) { console.error('close failed:', e); }
+  });
 }
 
 window.addEventListener('DOMContentLoaded', async () => {

@@ -1472,6 +1472,11 @@ pub fn precreate_settings_window(app: &AppHandle) {
     .ok();
 }
 
+#[tauri::command]
+pub fn show_settings(app: AppHandle) {
+  show_settings_window(&app);
+}
+
 pub fn show_settings_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("settings") {
     window.show().ok();

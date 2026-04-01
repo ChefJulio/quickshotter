@@ -82,6 +82,7 @@ pub fn run() {
       commands::check_permission,
       commands::complete_onboarding,
       commands::open_permission_settings,
+      commands::show_settings,
       commands::get_config,
       commands::save_config,
       commands::get_default_config,
