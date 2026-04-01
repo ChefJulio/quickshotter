@@ -32,11 +32,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   tray.menu(&menu)
     .tooltip("QuickShotter")
     .show_menu_on_left_click(true)
-    .on_tray_icon_event(|tray, event| {
-      // Right-click tray icon -> quick open settings
-      if let TrayIconEvent::Click { button: MouseButton::Right, .. } = event {
-        crate::commands::show_settings_window(tray.app_handle());
-      }
+    .on_tray_icon_event(|_tray, _event| {
+      // Menu shows on both left and right click (Tauri default).
+      // Settings is accessible from the menu.
     })
     .on_menu_event(move |app, event| {
       match event.id().as_ref() {
