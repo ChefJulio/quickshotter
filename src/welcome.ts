@@ -98,36 +98,42 @@ async function onPermissionGranted() {
   status.textContent = '';
   status.className = 'status granted';
 
-  btn.textContent = 'Start Capturing';
-  btn.className = 'btn btn-success';
-  btn.disabled = false;
-  btn.onclick = async () => {
+  // Show menu bar hint
+  const hint = document.getElementById('menu-hint');
+  if (hint) hint.style.display = 'block';
+
+  // Replace button area with two side-by-side buttons
+  const btnRow = document.getElementById('btn-row')!;
+  btnRow.innerHTML = '';
+
+  const startBtn = document.createElement('button');
+  startBtn.textContent = 'Start Capturing';
+  startBtn.className = 'btn btn-success';
+  startBtn.onclick = async () => {
     try { await invoke('complete_onboarding'); } catch {}
     const win = getCurrentWindow();
     await win.close();
   };
 
-  // Add "Customize Hotkeys" link
-  if (!document.getElementById('settings-link')) {
-    const link = document.createElement('button');
-    link.id = 'settings-link';
-    link.textContent = 'Customize Hotkeys';
-    link.className = 'btn-link';
-    link.onclick = async () => {
-      try {
-        await invoke('complete_onboarding');
-        const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-        const settingsWin = await WebviewWindow.getByLabel('settings');
-        if (settingsWin) {
-          await settingsWin.show();
-          await settingsWin.setFocus();
-        }
-      } catch {}
-      const win = getCurrentWindow();
-      await win.close();
-    };
-    btn.parentElement!.appendChild(link);
-  }
+  const settingsBtn = document.createElement('button');
+  settingsBtn.textContent = 'Settings';
+  settingsBtn.className = 'btn btn-secondary';
+  settingsBtn.onclick = async () => {
+    try {
+      await invoke('complete_onboarding');
+      const { WebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+      const settingsWin = await WebviewWindow.getByLabel('settings');
+      if (settingsWin) {
+        await settingsWin.show();
+        await settingsWin.setFocus();
+      }
+    } catch {}
+    const win = getCurrentWindow();
+    await win.close();
+  };
+
+  btnRow.appendChild(startBtn);
+  btnRow.appendChild(settingsBtn);
 }
 
 window.addEventListener('DOMContentLoaded', async () => {

@@ -565,12 +565,13 @@ pub fn is_likely_blank(img: &RgbaImage) -> bool {
   if img.width() == 0 || img.height() == 0 {
     return true;
   }
-  // Sample every ~997th pixel (prime stride avoids repeating patterns)
-  img
-    .as_raw()
-    .chunks_exact(4)
-    .step_by(997)
-    .all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0)
+  // Sample every ~997th pixel (prime stride avoids repeating patterns).
+  // Check for all-black (RGB=0) OR all-transparent (A=0) — macOS may
+  // return either when permission is denied or revoked.
+  let samples: Vec<&[u8]> = img.as_raw().chunks_exact(4).step_by(997).collect();
+  let all_black = samples.iter().all(|px| px[0] == 0 && px[1] == 0 && px[2] == 0);
+  let all_transparent = samples.iter().all(|px| px[3] == 0);
+  all_black || all_transparent
 }
 
 /// Copy plain text to the system clipboard.

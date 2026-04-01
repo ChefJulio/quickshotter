@@ -31,11 +31,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   }
   tray.menu(&menu)
     .tooltip("QuickShotter")
-    .show_menu_on_left_click(false)
+    .show_menu_on_left_click(true)
     .on_tray_icon_event(|tray, event| {
-      // Left-click tray icon -> open settings (standard Windows tray pattern).
-      // Right-click still shows the context menu (default tray behavior).
-      if let TrayIconEvent::Click { button: MouseButton::Left, .. } = event {
+      // Right-click tray icon -> quick open settings
+      if let TrayIconEvent::Click { button: MouseButton::Right, .. } = event {
         crate::commands::show_settings_window(tray.app_handle());
       }
     })

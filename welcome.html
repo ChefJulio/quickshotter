@@ -157,6 +157,27 @@
         color: #666;
         margin-top: 6px;
       }
+      .btn-row {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        margin-top: 10px;
+      }
+      .btn-secondary {
+        background: #333;
+        color: #e8e8e8;
+        border: 1px solid #555;
+      }
+      .btn-secondary:hover {
+        background: #444;
+        border-color: #666;
+      }
+      .menu-hint {
+        font-size: 12px;
+        color: #666;
+        margin-top: 14px;
+        text-align: center;
+      }
       .btn-link {
         display: block;
         margin: 12px auto 0;
@@ -209,8 +230,11 @@
         </div>
       </div>
 
-      <button class="btn btn-primary" id="grant-btn">Grant Access</button>
+      <div class="btn-row" id="btn-row">
+        <button class="btn btn-primary" id="grant-btn">Grant Access</button>
+      </div>
       <div class="status" id="status"></div>
+      <p class="menu-hint" id="menu-hint" style="display:none">Left-click the menu bar icon for all capture modes</p>
     </div>
   </body>
 </html>
