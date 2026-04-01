@@ -70,6 +70,14 @@ pub fn request_permission() {
   capture::request_screen_recording_permission();
 }
 
+/// Open Screen Recording settings directly (no system dialog).
+/// Used from the Settings > About section.
+#[tauri::command]
+pub fn open_permission_settings() {
+  #[cfg(target_os = "macos")]
+  capture::open_screen_recording_settings();
+}
+
 /// Check if screen recording permission is currently granted.
 #[tauri::command]
 pub fn check_permission() -> bool {

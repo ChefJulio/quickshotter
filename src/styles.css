@@ -438,3 +438,12 @@ button:hover {
   .reset-dropdown button:hover { background: #f0f0f0; }
   .reset-confirm-dialog { background: #fff; border-color: #ddd; }
 }
+
+.permission-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #333;
+}
+.permission-section .about-detail {
+  margin-top: 4px;
+}

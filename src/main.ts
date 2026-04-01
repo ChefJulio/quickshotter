@@ -500,6 +500,18 @@ window.addEventListener('DOMContentLoaded', () => {
     await relaunch();
   });
 
+  // macOS: show Screen Recording permission button
+  if (/Mac/.test(navigator.platform)) {
+    const permSection = document.getElementById('permission-section');
+    const permBtn = document.getElementById('permission-btn');
+    if (permSection) permSection.style.display = 'block';
+    if (permBtn) {
+      permBtn.addEventListener('click', async () => {
+        try { await invoke('open_permission_settings'); } catch {}
+      });
+    }
+  }
+
   // Reset to defaults UI
   const resetBtn = document.getElementById('reset-btn')!;
   const resetDropdown = document.getElementById('reset-dropdown')!;

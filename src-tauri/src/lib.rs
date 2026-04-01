@@ -81,6 +81,7 @@ pub fn run() {
       commands::request_permission,
       commands::check_permission,
       commands::complete_onboarding,
+      commands::open_permission_settings,
       commands::get_config,
       commands::save_config,
       commands::get_default_config,
@@ -111,17 +112,13 @@ pub fn run() {
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
 
-      // macOS: show welcome/onboarding window if permission not yet granted.
-      // On subsequent launches (or if already granted), skip it entirely.
+      // macOS: show welcome/onboarding if permission is missing.
+      // Shows on first launch OR if user revoked permission after onboarding.
       #[cfg(target_os = "macos")]
       {
-        let onboarded = app.path().app_config_dir().ok()
-          .map(|d| d.join(".onboarded").exists())
-          .unwrap_or(false);
+        let has_permission = capture::has_screen_recording_permission();
 
-        if !onboarded {
-          // Show welcome window — don't trigger system dialog yet,
-          // let the user click the button in our guided flow.
+        if !has_permission {
           use tauri::{WebviewUrl, WebviewWindowBuilder};
           WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
             .title("Welcome to QuickShotter")
