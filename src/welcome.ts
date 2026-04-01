@@ -36,8 +36,6 @@ async function loadHotkey() {
 }
 
 btn.addEventListener('click', async () => {
-  btn.disabled = true;
-  btn.textContent = 'Waiting...';
 
   // Trigger system permission dialog (adds QuickShotter to the list)
   try {
@@ -110,14 +108,14 @@ async function onPermissionGranted() {
   `;
 
   document.getElementById('start-btn')!.addEventListener('click', async () => {
-    try { await invoke('complete_onboarding'); } catch (e) { console.error('complete_onboarding failed:', e); }
-    try { const win = getCurrentWindow(); await win.close(); } catch (e) { console.error('close failed:', e); }
+    await invoke('complete_onboarding').catch(() => {});
+    await getCurrentWindow().destroy().catch(() => {});
   });
 
   document.getElementById('settings-btn')!.addEventListener('click', async () => {
-    try { await invoke('complete_onboarding'); } catch (e) { console.error('complete_onboarding failed:', e); }
-    try { await invoke('show_settings'); } catch (e) { console.error('show_settings failed:', e); }
-    try { const win = getCurrentWindow(); await win.close(); } catch (e) { console.error('close failed:', e); }
+    await invoke('complete_onboarding').catch(() => {});
+    await invoke('show_settings').catch(() => {});
+    await getCurrentWindow().destroy().catch(() => {});
   });
 }
 
