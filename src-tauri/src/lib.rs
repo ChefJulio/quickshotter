@@ -143,7 +143,7 @@ pub fn run() {
         std::thread::spawn(move || {
           let mut had_permission = has_permission;
           loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::thread::sleep(std::time::Duration::from_secs(1));
             let now = capture::has_screen_recording_permission();
             if had_permission && !now {
               // Permission was revoked — reset onboarding and show welcome
