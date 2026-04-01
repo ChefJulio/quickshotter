@@ -32,13 +32,12 @@ function onPermissionGranted() {
   document.getElementById('step3')!.querySelector('.step-num')!.textContent = '\u2713';
 
   document.getElementById('status')!.textContent = '';
-  const hint = document.getElementById('menu-hint');
-  if (hint) hint.style.display = 'block';
+  document.getElementById('menu-hint')?.classList.remove('hidden');
 
   // Swap buttons
-  document.getElementById('grant-btn')!.style.display = 'none';
-  document.getElementById('start-btn')!.style.display = '';
-  document.getElementById('settings-btn')!.style.display = '';
+  document.getElementById('grant-btn')!.classList.add('hidden');
+  document.getElementById('start-btn')!.classList.remove('hidden');
+  document.getElementById('settings-btn')!.classList.remove('hidden');
 }
 
 function startPolling() {

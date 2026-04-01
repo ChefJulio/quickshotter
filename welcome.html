@@ -178,6 +178,9 @@
         margin-top: 14px;
         text-align: center;
       }
+      .hidden {
+        display: none !important;
+      }
       .btn-link {
         display: block;
         margin: 12px auto 0;
@@ -232,11 +235,11 @@
 
       <div class="btn-row" id="btn-row">
         <button class="btn btn-primary" id="grant-btn">Grant Access</button>
-        <button class="btn btn-success" id="start-btn" style="display:none">Start Capturing</button>
-        <button class="btn btn-secondary" id="settings-btn" style="display:none">Settings</button>
+        <button class="btn btn-success hidden" id="start-btn">Start Capturing</button>
+        <button class="btn btn-secondary hidden" id="settings-btn">Settings</button>
       </div>
       <div class="status" id="status"></div>
-      <p class="menu-hint" id="menu-hint" style="display:none">Left-click the menu bar icon for all capture modes</p>
+      <p class="menu-hint hidden" id="menu-hint">Left-click the menu bar icon for all capture modes</p>
     </div>
   </body>
 </html>
