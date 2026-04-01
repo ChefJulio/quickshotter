@@ -115,12 +115,19 @@ pub fn run() {
       // macOS: show welcome/onboarding if not yet completed, or if permission revoked.
       #[cfg(target_os = "macos")]
       {
+        let has_permission = capture::has_screen_recording_permission();
         let onboarded = app.path().app_config_dir().ok()
           .map(|d| d.join(".onboarded").exists())
           .unwrap_or(false);
-        let has_permission = capture::has_screen_recording_permission();
 
-        if !onboarded || !has_permission {
+        // If permission was revoked, reset onboarding so it shows fresh
+        if !has_permission && onboarded {
+          if let Ok(dir) = app.path().app_config_dir() {
+            let _ = std::fs::remove_file(dir.join(".onboarded"));
+          }
+        }
+
+        if !has_permission || !onboarded {
           use tauri::{WebviewUrl, WebviewWindowBuilder};
           WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
             .title("Welcome to QuickShotter")
@@ -130,6 +137,30 @@ pub fn run() {
             .build()
             .ok();
         }
+
+        // Poll permission in background — if revoked while running, show welcome
+        let handle = app.handle().clone();
+        std::thread::spawn(move || {
+          let mut had_permission = has_permission;
+          loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let now = capture::has_screen_recording_permission();
+            if had_permission && !now {
+              // Permission was revoked — reset onboarding and show welcome
+              if let Ok(dir) = handle.path().app_config_dir() {
+                let _ = std::fs::remove_file(dir.join(".onboarded"));
+              }
+              use tauri::{WebviewUrl, WebviewWindowBuilder};
+              let _ = WebviewWindowBuilder::new(&handle, "welcome", WebviewUrl::App("welcome.html".into()))
+                .title("Welcome to QuickShotter")
+                .inner_size(440.0, 560.0)
+                .resizable(false)
+                .center()
+                .build();
+            }
+            had_permission = now;
+          }
+        });
       }
 
       // Sync autostart registry/launch-agent to match config on every launch.
