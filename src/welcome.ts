@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 let polling = false;
 
@@ -22,13 +21,6 @@ async function loadHotkey() {
     const config: { hotkey_region: string } = await invoke('get_config');
     renderKeycaps(config.hotkey_region || 'Alt+Backquote');
   } catch {}
-}
-
-function closeWindow() {
-  getCurrentWindow().destroy().catch(() => {
-    // Fallback: hide if destroy fails
-    getCurrentWindow().hide().catch(() => {});
-  });
 }
 
 function onPermissionGranted() {
@@ -91,17 +83,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     startPolling();
   });
 
-  // Start Capturing button
-  document.getElementById('start-btn')!.addEventListener('click', async () => {
-    await invoke('complete_onboarding').catch(() => {});
-    closeWindow();
+  // Start Capturing — Rust closes the window
+  document.getElementById('start-btn')!.addEventListener('click', () => {
+    invoke('complete_onboarding');
   });
 
-  // Settings button
-  document.getElementById('settings-btn')!.addEventListener('click', async () => {
-    await invoke('complete_onboarding').catch(() => {});
-    await invoke('show_settings').catch(() => {});
-    closeWindow();
+  // Settings — Rust closes the window and opens settings
+  document.getElementById('settings-btn')!.addEventListener('click', () => {
+    invoke('show_settings');
+    invoke('complete_onboarding');
   });
 
   // Check if already granted on load

@@ -92,7 +92,7 @@ pub fn check_permission() -> bool {
   { true }
 }
 
-/// Mark onboarding as complete so the welcome window never shows again.
+/// Mark onboarding as complete and close the welcome window.
 #[tauri::command]
 pub fn complete_onboarding(app: AppHandle) {
   let config_dir = app.path().app_config_dir().ok();
@@ -100,6 +100,10 @@ pub fn complete_onboarding(app: AppHandle) {
     let flag = dir.join(".onboarded");
     let _ = std::fs::create_dir_all(&dir);
     let _ = std::fs::write(flag, "1");
+  }
+  // Close the welcome window from Rust side
+  if let Some(win) = app.get_webview_window("welcome") {
+    win.destroy().ok();
   }
 }
 
