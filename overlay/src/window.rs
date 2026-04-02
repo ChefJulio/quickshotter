@@ -96,13 +96,20 @@ fn apply_macos_fixups(window: &Window) {
     let mtm = objc2::MainThreadMarker::new_unchecked();
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    app.activate();
+    let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
 
     // Ensure transparent compositing works
     let _: () = msg_send![ns_window, setOpaque: false];
     // NSColor.clearColor
     let clear_color: *mut AnyObject = msg_send![objc2::class!(NSColor), clearColor];
     let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+
+    // Set the NSView's layer (CAMetalLayer) to non-opaque so the alpha channel
+    // from the wgpu surface is composited with the desktop.
+    let layer: *mut AnyObject = msg_send![ns_view, layer];
+    if !layer.is_null() {
+      let _: () = msg_send![layer, setOpaque: false];
+    }
 
     // NSWindowCollectionBehavior: canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8)
     let behavior: u64 = (1 << 0) | (1 << 8);

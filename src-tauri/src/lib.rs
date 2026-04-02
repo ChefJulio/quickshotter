@@ -113,7 +113,9 @@ pub fn run() {
       app.manage(Mutex::new(state::AppState::new(config)));
 
       // macOS: show welcome/onboarding if not yet completed, or if permission revoked.
-      #[cfg(target_os = "macos")]
+      // Skip entirely in debug builds — CGPreflightScreenCaptureAccess is unreliable
+      // for unsigned binaries and blocks dev iteration.
+      #[cfg(all(target_os = "macos", not(debug_assertions)))]
       {
         let has_permission = capture::has_screen_recording_permission();
         let onboarded = app.path().app_config_dir().ok()

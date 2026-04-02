@@ -37,6 +37,26 @@ enum StdinMsg {
 }
 
 fn main() {
+  // macOS: ensure this process can become the active application and receive
+  // events. Without this, a child process's windows won't get mouse/keyboard
+  // events because macOS doesn't deliver events to background processes.
+  #[cfg(target_os = "macos")]
+  {
+    use objc2::msg_send;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    unsafe {
+      let mtm = objc2::MainThreadMarker::new_unchecked();
+      let app = NSApplication::sharedApplication(mtm);
+      // Start as Regular to initialize the event loop, then switch to
+      // Accessory so we don't appear in Cmd+Tab / Dock.
+      app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+      app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+      // Force-activate so we still get events despite being Accessory
+      let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
+    }
+    eprintln!("[daemon] NSApp activated (Accessory + forced)");
+  }
+
   let gpu = match GpuContext::init() {
     Ok(g) => Arc::new(g),
     Err(e) => {
@@ -538,7 +558,12 @@ impl ApplicationHandler<()> for OverlayApp {
           needs_redraw = true;
         }
 
+        WindowEvent::Occluded(occluded) => {
+          eprintln!("[daemon-event] Occluded({occluded})");
+        }
+
         WindowEvent::MouseInput { state: btn_state, button, .. } => {
+          eprintln!("[daemon-event] MouseInput({button:?}, {btn_state:?})");
           match (button, btn_state) {
             (MouseButton::Left, ElementState::Pressed) => {
               interaction.mouse_down(interaction.current_x, interaction.current_y);
@@ -574,18 +599,22 @@ impl ApplicationHandler<()> for OverlayApp {
           }
         }
 
-        WindowEvent::Focused(false) => {
+        WindowEvent::Focused(focused) => {
+          eprintln!("[daemon-event] Focused({focused})");
           // On macOS, borderless overlay windows may not receive focus
           // immediately, causing a spurious blur event. Only cancel if
           // the window has been focused at least once (i.e. user tabbed away).
-          #[cfg(not(target_os = "macos"))]
-          if interaction.phase == Phase::Idle {
-            interaction.cancel();
-            needs_finish = true;
+          if !focused {
+            #[cfg(not(target_os = "macos"))]
+            if interaction.phase == Phase::Idle {
+              interaction.cancel();
+              needs_finish = true;
+            }
           }
         }
 
         WindowEvent::CloseRequested => {
+          eprintln!("[daemon-event] CloseRequested");
           interaction.cancel();
           needs_finish = true;
         }

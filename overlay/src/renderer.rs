@@ -278,11 +278,15 @@ impl LiveGpuRenderer {
       .ok_or_else(|| "No surface format available".to_string())?;
 
     // Need PreMultiplied alpha for transparent compositing on macOS
+    eprintln!("[live-gpu] available alpha modes: {:?}", caps.alpha_modes);
     let alpha_mode = if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
       wgpu::CompositeAlphaMode::PreMultiplied
+    } else if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+      wgpu::CompositeAlphaMode::PostMultiplied
     } else {
       caps.alpha_modes[0]
     };
+    eprintln!("[live-gpu] selected alpha mode: {:?}", alpha_mode);
 
     let surface_config = wgpu::SurfaceConfiguration {
       usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

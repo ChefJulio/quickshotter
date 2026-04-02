@@ -614,8 +614,7 @@ async fn complete_region_capture_inner(
     return Err(AppError::Capture("Selection too small".to_string()));
   }
 
-  // Use pre-captured image if available (freeze mode always; on macOS, all modes
-  // pre-capture to avoid timing issues with overlay compositing).
+  // Use pre-captured image if available (freeze mode crops from the pre-capture).
   let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
 
   // Coordinates here are image-space (already converted from screen-space by the caller).
@@ -630,13 +629,9 @@ async fn complete_region_capture_inner(
     eprintln!("[timing] crop from pending: {:?}", t0.elapsed());
     img
   } else {
-    // Wait for overlay to de-render before capturing. The native overlay daemon
-    // already waits 34ms before sending its result, so this only needs to cover
-    // one extra vsync frame. For the webview overlay path (delayed captures),
-    // this covers the hide() animation.
-    let _ = tauri::async_runtime::spawn_blocking(|| {
-      std::thread::sleep(std::time::Duration::from_millis(50));
-    }).await;
+    // The native overlay daemon already waits one compositor frame (16ms on macOS,
+    // DwmFlush on Windows) before sending its result, so the window is already gone.
+    // No additional sleep needed.
     eprintln!("[timing] compositor wait: {:?}", t0.elapsed());
     // Capture just the selected region via BitBlt — much faster than
     // capturing the full desktop and cropping.

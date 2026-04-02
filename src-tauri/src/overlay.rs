@@ -239,9 +239,10 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     window_capture::start();
   }
 
-  // Pre-capture for freeze mode (and all modes on macOS)
+  // Pre-capture only for freeze mode (screenshot displayed as GPU texture).
+  // Live/instant modes use a transparent overlay — no pre-capture needed.
   let is_recording = mode == "record_region";
-  let needs_capture = !is_recording && (mode == "freeze" || cfg!(target_os = "macos"));
+  let needs_capture = !is_recording && mode == "freeze";
 
   let mut image_path: Option<String> = None;
   let mut image_width: u32 = 0;
