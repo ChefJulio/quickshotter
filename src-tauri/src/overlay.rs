@@ -287,7 +287,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     eprintln!("[timing] pre-capture start: {:?}", t0.elapsed());
     let screen = match capture::capture_all_monitors() {
       Ok(s) => s,
-      Err(e) => {
+      Err(_e) => {
         // On macOS, capture failure likely means permission was revoked
         #[cfg(target_os = "macos")]
         {

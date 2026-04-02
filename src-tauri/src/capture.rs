@@ -1,5 +1,6 @@
 use arboard::Clipboard;
-use image::{GenericImage, ImageBuffer, ImageEncoder, RgbaImage};
+#[allow(unused_imports)]
+use image::{ImageBuffer, RgbaImage};
 use std::path::PathBuf;
 use xcap::Monitor;
 
@@ -482,12 +483,6 @@ pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppEr
   }
 }
 
-/// Convert RGBA image to RGB bytes without cloning the source image.
-/// Strips the alpha channel, saving ~33% peak memory vs DynamicImage clone.
-pub fn rgba_to_rgb_pub(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
-  rgba_to_rgb(img)
-}
-
 fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
   let (w, h) = (img.width(), img.height());
   let rgb_bytes: Vec<u8> = img
@@ -822,13 +817,4 @@ pub fn write_image_to_path(img: &RgbaImage, filepath: &PathBuf, config: &AppConf
   Ok(())
 }
 
-/// Save an image to disk based on config. Returns the filepath if saved.
-/// Combines reserve_filepath + write_image_to_path for callers that need both.
-pub fn save_to_disk(img: &RgbaImage, config: &AppConfig) -> Result<Option<PathBuf>, AppError> {
-  let filepath = match reserve_filepath(config)? {
-    Some(p) => p,
-    None => return Ok(None),
-  };
-  write_image_to_path(img, &filepath, config)?;
-  Ok(Some(filepath))
-}
+

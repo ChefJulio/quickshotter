@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{
   AppHandle, Manager,
   menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
-  tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+  tray::TrayIconBuilder,
 };
 
 use crate::state::{AppState, LockRecover};
