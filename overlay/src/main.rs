@@ -193,16 +193,23 @@ impl OverlayApp {
 
     let renderer = if mode == CaptureMode::Freeze {
       let screenshot_data = req.image.as_ref().and_then(|path| {
-        eprintln!("[overlay-daemon] loading screenshot: {path}");
-        std::fs::read(path).ok()
+        let t_read = std::time::Instant::now();
+        let data = std::fs::read(path).ok();
+        eprintln!("[timing][daemon] screenshot file read ({} bytes): {:?}",
+          data.as_ref().map_or(0, |d| d.len()), t_read.elapsed());
+        data
       });
       match screenshot_data {
         Some(data) => {
+          let t_gpu = std::time::Instant::now();
           match FreezeRenderer::new(
             &self.gpu, Arc::clone(&win),
             &data, req.image_width, req.image_height,
           ) {
-            Ok(r) => ActiveRenderer::Freeze(r),
+            Ok(r) => {
+              eprintln!("[timing][daemon] GPU texture upload + surface: {:?}", t_gpu.elapsed());
+              ActiveRenderer::Freeze(r)
+            }
             Err(e) => {
               eprintln!("[overlay-daemon] freeze renderer failed: {e}");
               OverlayResult::Cancelled.send();

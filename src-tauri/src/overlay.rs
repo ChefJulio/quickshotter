@@ -475,18 +475,10 @@ fn find_overlay_binary() -> Result<PathBuf, AppError> {
   let exe_dir = exe.parent()
     .ok_or_else(|| AppError::Capture("Exe has no parent dir".to_string()))?;
 
-  // Production: next to main exe
-  let prod = exe_dir.join("quickshotter-overlay.exe");
-  if prod.exists() { return Ok(prod); }
-
-  // Also check without .exe (macOS/Linux)
-  let prod_unix = exe_dir.join("quickshotter-overlay");
-  if prod_unix.exists() { return Ok(prod_unix); }
-
-  // Development: walk up from src-tauri/target/debug/ to find overlay/target/debug/
+  // Development: prefer overlay/target/ build dir (always has latest build).
+  // Walk up from src-tauri/target/debug/ to find overlay/target/debug/.
   let mut dir = exe_dir;
   for _ in 0..5 {
-    // Check for overlay/target/debug/ or overlay/target/release/
     let dev_debug = dir.join("overlay").join("target").join("debug").join("quickshotter-overlay.exe");
     if dev_debug.exists() { return Ok(dev_debug); }
     let dev_release = dir.join("overlay").join("target").join("release").join("quickshotter-overlay.exe");
@@ -503,6 +495,12 @@ fn find_overlay_binary() -> Result<PathBuf, AppError> {
     }
   }
 
+  // Production: next to main exe (bundled by Tauri externalBin)
+  let prod = exe_dir.join("quickshotter-overlay.exe");
+  if prod.exists() { return Ok(prod); }
+  let prod_unix = exe_dir.join("quickshotter-overlay");
+  if prod_unix.exists() { return Ok(prod_unix); }
+
   Err(AppError::Capture(
     "Overlay binary not found. Build it with: cd overlay && cargo build".to_string()
   ))
@@ -511,6 +509,7 @@ fn find_overlay_binary() -> Result<PathBuf, AppError> {
 // ── Annotation window (unchanged) ──────────────────────────────────
 
 pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
+  let t0 = std::time::Instant::now();
   let (x, y, w, h) = if let Ok(Some(monitor)) = app.primary_monitor() {
     let pos = monitor.position();
     let size = monitor.size();
@@ -539,6 +538,7 @@ pub fn open_annotation_window(app: &AppHandle) -> Result<(), AppError> {
     .min_inner_size(400.0, 300.0)
     .visible(false)
     .build()?;
+  eprintln!("[timing] annotation webview window created: {:?}", t0.elapsed());
   Ok(())
 }
 

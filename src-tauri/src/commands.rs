@@ -1064,19 +1064,14 @@ async fn open_annotation_for_image(
   app: &AppHandle,
   image: image::RgbaImage,
 ) -> Result<CaptureResultDto, AppError> {
-  // Write JPEG to temp file — ~10x faster than PNG encode + base64 + IPC transfer.
-  // The original RgbaImage stays in pending_annotation for lossless final save.
-  let temp_path = std::env::temp_dir().join("qs_annotation.jpg");
-  {
-    let rgb = capture::rgba_to_rgb_pub(&image)?;
-    let file = std::fs::File::create(&temp_path)
-      .map_err(|e| AppError::Annotation(format!("Failed to create temp file: {e}")))?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
-    encoder
-      .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
-      .map_err(|e| AppError::Annotation(format!("Failed to encode temp JPEG: {e}")))?;
-  }
+  let t0 = std::time::Instant::now();
+  // Write raw RGBA bytes to temp file — no encoding, just a memcpy.
+  // JS loads the raw bytes and creates an ImageData directly.
+  let temp_path = std::env::temp_dir().join("qs_annotation.raw");
+  std::fs::write(&temp_path, image.as_raw())
+    .map_err(|e| AppError::Annotation(format!("Failed to write temp file: {e}")))?;
+  eprintln!("[timing] annotation raw RGBA write ({}x{}, {} bytes): {:?}",
+    image.width(), image.height(), image.as_raw().len(), t0.elapsed());
 
   {
     let s = app.state::<Mutex<AppState>>();
@@ -1106,12 +1101,18 @@ async fn open_annotation_for_image(
 /// Annotation editor: fetch the temp file path for the annotation image.
 /// The frontend loads this via Tauri's asset protocol (convertFileSrc).
 #[tauri::command]
-pub fn get_pending_annotation(app: AppHandle) -> Result<String, AppError> {
-  app.state::<Mutex<AppState>>().lock_or_recover()
-    .pending_annotation_path
+pub fn get_pending_annotation(app: AppHandle) -> Result<(String, u32, u32), AppError> {
+  let s = app.state::<Mutex<AppState>>();
+  let state = s.lock_or_recover();
+  let path = state.pending_annotation_path
     .as_ref()
     .map(|p| p.to_string_lossy().to_string())
-    .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))
+    .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))?;
+  let (w, h) = state.pending_annotation
+    .as_ref()
+    .map(|img| (img.width(), img.height()))
+    .unwrap_or((0, 0));
+  Ok((path, w, h))
 }
 
 /// Annotation editor: fetch modifier-to-tool config.
@@ -1139,6 +1140,7 @@ pub async fn save_annotated_capture(
   app: AppHandle,
   image_base64: String,
 ) -> Result<CaptureResultDto, AppError> {
+  eprintln!("[annotation] save_annotated_capture called, base64 len={}", image_base64.len());
   // Limit decoded size to prevent OOM from crafted input (~100MB decoded)
   const MAX_BASE64_LEN: usize = 134_000_000;
   if image_base64.len() > MAX_BASE64_LEN {
@@ -1235,18 +1237,10 @@ pub fn annotate_file_from_path(app: &AppHandle, path: &std::path::Path) -> Resul
     .map_err(|e| AppError::Annotation(format!("Failed to open image: {e}")))?
     .to_rgba8();
 
-  // Write JPEG to temp file for fast loading via asset protocol
-  let temp_path = std::env::temp_dir().join("qs_annotation.jpg");
-  {
-    let rgb = capture::rgba_to_rgb_pub(&img)?;
-    let file = std::fs::File::create(&temp_path)
-      .map_err(|e| AppError::Annotation(format!("Failed to create temp file: {e}")))?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
-    encoder
-      .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
-      .map_err(|e| AppError::Annotation(format!("Failed to encode temp JPEG: {e}")))?;
-  }
+  // Write raw RGBA bytes — no encoding overhead
+  let temp_path = std::env::temp_dir().join("qs_annotation.raw");
+  std::fs::write(&temp_path, img.as_raw())
+    .map_err(|e| AppError::Annotation(format!("Failed to write temp file: {e}")))?;
 
   {
     let s = app.state::<Mutex<AppState>>();

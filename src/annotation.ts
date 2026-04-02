@@ -68,7 +68,9 @@ const MAX_UNDO = 100;
 
 let canvas: HTMLCanvasElement;
 let ctx: CanvasRenderingContext2D;
-let sourceImage: HTMLImageElement;
+let sourceImage: HTMLImageElement | HTMLCanvasElement;
+let sourceWidth = 0;
+let sourceHeight = 0;
 let imageRect = { x: 0, y: 0, w: 0, h: 0 };
 let scale = 1;
 
@@ -134,8 +136,8 @@ function computeLayout() {
   // Use CSS dimensions (not backing-store pixels) since ctx.scale(dpr) is applied
   const sw = cssWidth();
   const sh = cssHeight();
-  const iw = sourceImage.naturalWidth;
-  const ih = sourceImage.naturalHeight;
+  const iw = sourceWidth;
+  const ih = sourceHeight;
   if (iw <= 0 || ih <= 0) {
     imageRect = { x: 0, y: 0, w: sw, h: sh };
     scale = 1;
@@ -164,15 +166,15 @@ function resetView() {
 function toImageCoords(screenX: number, screenY: number): Point | null {
   const x = (screenX - imageRect.x) / scale;
   const y = (screenY - imageRect.y) / scale;
-  if (x < 0 || y < 0 || x >= sourceImage.naturalWidth || y >= sourceImage.naturalHeight) {
+  if (x < 0 || y < 0 || x >= sourceWidth || y >= sourceHeight) {
     return null;
   }
   return { x, y };
 }
 
 function clampToImage(screenX: number, screenY: number): Point {
-  const x = Math.max(0, Math.min((screenX - imageRect.x) / scale, sourceImage.naturalWidth - 1));
-  const y = Math.max(0, Math.min((screenY - imageRect.y) / scale, sourceImage.naturalHeight - 1));
+  const x = Math.max(0, Math.min((screenX - imageRect.x) / scale, sourceWidth - 1));
+  const y = Math.max(0, Math.min((screenY - imageRect.y) / scale, sourceHeight - 1));
   return { x, y };
 }
 
@@ -441,7 +443,7 @@ function drawStep(c: CanvasRenderingContext2D, ann: StepAnnotation) {
 function drawBlurAnnotation(
   c: CanvasRenderingContext2D,
   ann: BlurAnnotation,
-  img: HTMLImageElement,
+  img: CanvasImageSource,
 ) {
   const r = ann.rect;
   // Screen-space coordinates for display rendering
@@ -472,7 +474,7 @@ function drawBlurAnnotation(
 function drawBlurAnnotationFullRes(
   c: CanvasRenderingContext2D,
   ann: BlurAnnotation,
-  img: HTMLImageElement,
+  img: CanvasImageSource,
 ) {
   const r = ann.rect;
   if (r.w < 1 || r.h < 1) return;
@@ -961,8 +963,8 @@ async function performGrabTextOcr(rect: { x: number; y: number; w: number; h: nu
   // Extract region from source image at full resolution
   const cx = Math.max(0, Math.round(rect.x));
   const cy = Math.max(0, Math.round(rect.y));
-  const cw = Math.min(Math.round(rect.w), sourceImage.naturalWidth - cx);
-  const ch = Math.min(Math.round(rect.h), sourceImage.naturalHeight - cy);
+  const cw = Math.min(Math.round(rect.w), sourceWidth - cx);
+  const ch = Math.min(Math.round(rect.h), sourceHeight - cy);
   if (cw < 1 || ch < 1) return;
 
   const offscreen = document.createElement('canvas');
@@ -986,7 +988,7 @@ async function performGrabTextOcr(rect: { x: number; y: number; w: number; h: nu
 
 function enterCropMode() {
   isCropping = true;
-  cropRect = { x: 0, y: 0, w: sourceImage.naturalWidth, h: sourceImage.naturalHeight };
+  cropRect = { x: 0, y: 0, w: sourceWidth, h: sourceHeight };
   cropResizeHandle = null;
   document.getElementById('crop-bar')!.style.display = 'flex';
   canvas.style.cursor = 'default';
@@ -1008,8 +1010,8 @@ function applyCrop() {
 
   // Bake current annotations + image into an offscreen canvas, then crop
   const offscreen = document.createElement('canvas');
-  offscreen.width = sourceImage.naturalWidth;
-  offscreen.height = sourceImage.naturalHeight;
+  offscreen.width = sourceWidth;
+  offscreen.height = sourceHeight;
   const offCtx = offscreen.getContext('2d')!;
   offCtx.drawImage(sourceImage, 0, 0);
   for (const ann of undoStack) {
@@ -1030,18 +1032,15 @@ function applyCrop() {
   const croppedCtx = cropped.getContext('2d')!;
   croppedCtx.drawImage(offscreen, cx, cy, cw, ch, 0, 0, cw, ch);
 
-  // Replace source image with cropped result
-  const dataUrl = cropped.toDataURL('image/png');
-  const newImg = new Image();
-  newImg.onload = () => {
-    sourceImage = newImg;
-    undoStack.length = 0;
-    redoStack.length = 0;
-    updateUndoRedoButtons();
-    computeLayout();
-    exitCropMode();
-  };
-  newImg.src = dataUrl;
+  // Replace source image with cropped canvas directly — no encoding
+  sourceImage = cropped;
+  sourceWidth = cw;
+  sourceHeight = ch;
+  undoStack.length = 0;
+  redoStack.length = 0;
+  updateUndoRedoButtons();
+  computeLayout();
+  exitCropMode();
 }
 
 function drawCropOverlay() {
@@ -1176,8 +1175,8 @@ function onCropMouseMove(e: MouseEvent) {
     return;
   }
 
-  const iw = sourceImage.naturalWidth;
-  const ih = sourceImage.naturalHeight;
+  const iw = sourceWidth;
+  const ih = sourceHeight;
 
   if (cropResizeHandle === 'new') {
     // Drawing new crop rect
@@ -1233,34 +1232,39 @@ function onCropMouseUp() {
 let saving = false;
 
 async function compositeAndSave() {
-  if (saving) return;
+  if (saving) { console.log('[save] already saving, skipping'); return; }
   saving = true;
-  // Create offscreen canvas at original image dimensions
-  const offscreen = document.createElement('canvas');
-  offscreen.width = sourceImage.naturalWidth;
-  offscreen.height = sourceImage.naturalHeight;
-  const offCtx = offscreen.getContext('2d')!;
-
-  // Draw original image at full resolution
-  offCtx.drawImage(sourceImage, 0, 0);
-
-  // Draw all annotations in image-space (no scale needed)
-  for (const ann of undoStack) {
-    if (ann.type === 'blur') {
-      drawBlurAnnotationFullRes(offCtx, ann, sourceImage);
-    } else {
-      drawAnnotation(offCtx, ann);
-    }
-  }
-
-  // Export as PNG base64
-  const dataUrl = offscreen.toDataURL('image/png');
-  const base64 = dataUrl.split(',')[1];
-
+  console.log('[save] compositeAndSave started');
   try {
+    // Create offscreen canvas at original image dimensions
+    const offscreen = document.createElement('canvas');
+    offscreen.width = sourceWidth;
+    offscreen.height = sourceHeight;
+    console.log(`[save] offscreen canvas: ${offscreen.width}x${offscreen.height}`);
+    const offCtx = offscreen.getContext('2d')!;
+
+    // Draw original image at full resolution
+    offCtx.drawImage(sourceImage, 0, 0);
+
+    // Draw all annotations in image-space (no scale needed)
+    for (const ann of undoStack) {
+      if (ann.type === 'blur') {
+        drawBlurAnnotationFullRes(offCtx, ann, sourceImage);
+      } else {
+        drawAnnotation(offCtx, ann);
+      }
+    }
+    console.log(`[save] annotations drawn (${undoStack.length} items)`);
+
+    // Export as PNG base64
+    const dataUrl = offscreen.toDataURL('image/png');
+    const base64 = dataUrl.split(',')[1];
+    console.log(`[save] base64 encoded, length=${base64?.length ?? 'null'}`);
+
     await invoke('save_annotated_capture', { imageBase64: base64 });
+    console.log('[save] invoke completed');
   } catch (e) {
-    console.error('Save failed:', e);
+    console.error('[save] failed:', e);
     saving = false;
   }
 }
@@ -1326,8 +1330,8 @@ function onWheel(e: WheelEvent) {
 
     const sw = cssWidth();
     const sh = cssHeight();
-    const iw = sourceImage.naturalWidth;
-    const ih = sourceImage.naturalHeight;
+    const iw = sourceWidth;
+    const ih = sourceHeight;
     const fitScale = Math.min(sw / iw, sh / ih, 1.0);
 
     const oldScale = fitScale * zoomLevel;
@@ -1523,24 +1527,30 @@ window.addEventListener('DOMContentLoaded', async () => {
     const safeTop = Math.max(8, ((window.screen as any).availTop || 0) + 8);
     toolbar.style.top = `${safeTop}px`;
 
-    // Load the captured image via asset protocol (no base64 IPC overhead)
-    const filePath: string = await invoke('get_pending_annotation');
+    // Load raw RGBA bytes directly — no encoding/decoding overhead.
+    // Rust writes raw pixels to disk (~5ms), JS creates ImageData from them.
+    const [filePath, imgW, imgH] = await invoke<[string, number, number]>('get_pending_annotation');
     const assetUrl = convertFileSrc(filePath);
-    const img = new Image();
-    img.onload = async () => {
-      sourceImage = img;
-      computeLayout();
-      render();
+    const response = await fetch(assetUrl);
+    const buffer = await response.arrayBuffer();
 
-      const win = getCurrentWindow();
-      await win.show();
-      await win.setFocus();
-    };
-    img.onerror = () => {
-      console.error('Failed to load annotation image');
-      cancelAnnotation();
-    };
-    img.src = assetUrl;
+    // Create canvas with raw pixel data — zero encoding
+    const rawCanvas = document.createElement('canvas');
+    rawCanvas.width = imgW;
+    rawCanvas.height = imgH;
+    const rawCtx = rawCanvas.getContext('2d')!;
+    const imageData = new ImageData(new Uint8ClampedArray(buffer), imgW, imgH);
+    rawCtx.putImageData(imageData, 0, 0);
+
+    sourceImage = rawCanvas;
+    sourceWidth = imgW;
+    sourceHeight = imgH;
+    computeLayout();
+    render();
+
+    const win = getCurrentWindow();
+    await win.show();
+    await win.setFocus();
   } catch (e) {
     console.error('Annotation editor init failed:', e);
     cancelAnnotation();
