@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 #[allow(unused_imports)]
-use image::{ImageBuffer, RgbaImage};
+use image::{ImageBuffer, ImageEncoder, RgbaImage};
 use std::path::PathBuf;
 use xcap::Monitor;
 
