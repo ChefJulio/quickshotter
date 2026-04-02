@@ -201,14 +201,15 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     state.overlay_mode = mode.to_string();
   }
 
+  eprintln!("[timing] state lock + mode set: {:?}", t0.elapsed());
+
   // macOS: check screen recording permission before proceeding.
-  // For production builds, the preflight check is reliable.
-  // For dev builds, it may fail — the blank-capture fallback below handles that.
   #[cfg(target_os = "macos")]
   if !capture::ensure_screen_recording_permission(app) {
     app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
     return Ok(());
   }
+  eprintln!("[timing] permission check: {:?}", t0.elapsed());
 
   // Get virtual desktop bounds — use cached if available (avoids Monitor::all() OS call)
   let bounds = {
@@ -226,6 +227,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       }
     }
   };
+  eprintln!("[timing] desktop bounds resolved: {:?}", t0.elapsed());
   eprintln!("[overlay] desktop bounds: origin=({},{}) size={}x{}", bounds.x, bounds.y, bounds.width, bounds.height);
 
   // Cache bounds so completion handlers don't re-enumerate monitors
@@ -246,6 +248,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
   let mut image_height: u32 = 0;
 
   if needs_capture {
+    eprintln!("[timing] pre-capture start: {:?}", t0.elapsed());
     let screen = match capture::capture_all_monitors() {
       Ok(s) => s,
       Err(e) => {
@@ -271,7 +274,10 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       return Ok(());
     }
 
-    // Write raw RGBA to temp file for the overlay daemon
+    eprintln!("[timing] screen captured ({}x{}): {:?}", screen.image.width(), screen.image.height(), t0.elapsed());
+
+    // Write raw RGBA to temp file for the overlay daemon (freeze mode only —
+    // daemon loads it as a GPU texture for the frozen screenshot background)
     if mode == "freeze" {
       let temp = std::env::temp_dir().join("qs_overlay_capture.raw");
       if let Err(e) = std::fs::write(&temp, screen.image.as_raw()) {
@@ -281,60 +287,20 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
       image_path = Some(temp.to_string_lossy().to_string());
       image_width = screen.image.width();
       image_height = screen.image.height();
+      eprintln!("[timing] temp RGBA file written: {:?}", t0.elapsed());
     }
 
     // Store pending screenshot for cropping after selection
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
     state.pending_screenshot = Some(screen.image);
-    // No base64 needed anymore — the daemon renders the texture directly
-  
   }
 
   eprintln!("[overlay] ready to send in {:?}, mode={mode}", t0.elapsed());
 
-  // macOS: use webview overlay (Tauri window with overlay.html).
-  // The native daemon overlay has platform-specific rendering that doesn't
-  // work on macOS. The webview path handles all macOS quirks natively.
-  #[cfg(target_os = "macos")]
-  {
-    // For freeze mode on macOS, encode screenshot as base64 JPEG for the webview
-    if mode == "freeze" || mode == "live" || mode == "instant" {
-      let b64 = {
-        let s = app.state::<Mutex<AppState>>();
-        let state = s.lock_or_recover();
-        state.pending_screenshot.as_ref().map(|img| {
-          let rgb_data: Vec<u8> = img.as_raw().chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect();
-          let mut jpeg_buf = Vec::new();
-          let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 80);
-          match image::ImageEncoder::write_image(encoder, &rgb_data, img.width(), img.height(), image::ExtendedColorType::Rgb8) {
-            Ok(()) => {
-              use base64::Engine;
-              Some(base64::engine::general_purpose::STANDARD.encode(&jpeg_buf))
-            }
-            Err(e) => {
-              eprintln!("[overlay] JPEG encode failed: {e}");
-              None
-            }
-          }
-        }).flatten()
-      }; // lock dropped here
-      if let Some(b64) = b64 {
-        app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot_base64 = Some(b64);
-      }
-    }
-
-    eprintln!("[overlay] calling open_webview_overlay");
-    let result = open_webview_overlay(app, mode, &bounds);
-    eprintln!("[overlay] open_webview_overlay result: {:?}", result.as_ref().map(|_| "ok").unwrap_or("err"));
-    if let Err(ref e) = result {
-      eprintln!("[overlay] webview overlay error: {e}");
-    }
-    return result;
-  }
-
-  // Windows: use native daemon overlay
-  #[cfg(not(target_os = "macos"))]
+  // Native daemon overlay — GPU-accelerated on both Windows and macOS.
+  // Freeze mode: opaque wgpu window with screenshot texture.
+  // Live/window/etc: transparent overlay (Win32 layered window or Metal surface).
   {
     let daemon_mode = mode.to_string();
     let app2 = app.clone();
@@ -359,42 +325,6 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     });
 
     Ok(())
-  }
-}
-
-/// macOS: open the webview-based overlay window.
-#[cfg(target_os = "macos")]
-fn open_webview_overlay(app: &AppHandle, mode: &str, bounds: &capture::DesktopBounds) -> Result<(), AppError> {
-  // On macOS, xcap returns logical points for monitor dimensions,
-  // and Tauri's position/inner_size also expect logical points.
-  // No scale factor conversion needed.
-  let label = "overlay";
-
-  // Destroy any leftover overlay window from a previous capture
-  if let Some(existing) = app.get_webview_window(label) {
-    existing.destroy().ok();
-  }
-
-  match WebviewWindowBuilder::new(app, label, WebviewUrl::App("overlay.html".into()))
-    .title("QuickShotter Overlay")
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    .position(bounds.x as f64, bounds.y as f64)
-    .inner_size(bounds.width as f64, bounds.height as f64)
-    .build()
-  {
-    Ok(_win) => {
-      eprintln!("[overlay] webview overlay created ({}x{})", bounds.width, bounds.height);
-      Ok(())
-    }
-    Err(e) => {
-      // Reset state so the app doesn't get stuck
-      app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-      Err(AppError::Capture(format!("Failed to create overlay window: {e}")))
-    }
   }
 }
 
@@ -436,6 +366,8 @@ fn run_capture_on_daemon(
 /// short delay to let the compositor finish removing the window before we
 /// capture the screen fresh.
 fn dispatch_result(app: &AppHandle, result: DaemonResult) {
+  let t_dispatch = std::time::Instant::now();
+  eprintln!("[timing] dispatch_result entered");
   match result {
     DaemonResult::Ready => { /* shouldn't happen here */ }
     DaemonResult::Region { x1, y1, x2, y2, shift, alt } => {
@@ -443,6 +375,7 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
       let overlay_mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
+        eprintln!("[timing] async capture task started: {:?} after dispatch", t_dispatch.elapsed());
         let result = if overlay_mode == "ocr" {
           // Convert screen coords to image coords (same as region capture)
           let (bx, by) = {
@@ -524,7 +457,7 @@ fn reset_capture_state(app: &AppHandle) {
 
 pub fn close_overlay(app: &AppHandle) {
   window_capture::stop();
-  // Close the webview overlay window (macOS path)
+  // Clean up any leftover webview overlay window (legacy path, harmless no-op)
   if let Some(win) = app.get_webview_window("overlay") {
     win.destroy().ok();
   }

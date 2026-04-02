@@ -268,10 +268,12 @@ impl OverlayApp {
       || matches!(self.state, AppState::Active { renderer: ActiveRenderer::LiveGpu(_), .. });
     if needs_gpu_show {
       self.render_frame();
+      eprintln!("[timing][daemon] first frame rendered: {:?}", t0.elapsed());
       if let AppState::Active { window, .. } = &self.state {
         window.set_visible(true);
         window.focus_window();
         window.request_redraw();
+        eprintln!("[timing][daemon] window visible + focused: {:?}", t0.elapsed());
       }
     }
   }
@@ -320,11 +322,10 @@ impl OverlayApp {
     };
 
     if let Some(result) = result {
-      eprintln!("[overlay-daemon] selection complete, destroying window");
+      let t_finish = std::time::Instant::now();
+      eprintln!("[timing][daemon] mouse-up → finish_capture entered");
       self.state = AppState::Idle;
-      // Wait for DWM to finish compositing the window destruction.
-      // DwmFlush blocks until the next composition cycle completes (~6-16ms
-      // depending on refresh rate). This is a guarantee, not a guess.
+      eprintln!("[timing][daemon] window destroyed: {:?}", t_finish.elapsed());
       #[cfg(target_os = "windows")]
       {
         use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -332,8 +333,9 @@ impl OverlayApp {
       }
       #[cfg(not(target_os = "windows"))]
       std::thread::sleep(std::time::Duration::from_millis(16));
-      eprintln!("[overlay-daemon] DWM flushed, sending result to host");
+      eprintln!("[timing][daemon] compositor wait done: {:?}", t_finish.elapsed());
       result.send();
+      eprintln!("[timing][daemon] result sent to host: {:?}", t_finish.elapsed());
     }
   }
 

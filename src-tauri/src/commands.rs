@@ -49,16 +49,6 @@ pub fn get_overlay_origin() -> Result<(i32, i32), AppError> {
   Ok((bounds.x, bounds.y))
 }
 
-/// Return the pending screenshot as base64 JPEG for the webview overlay (macOS).
-#[tauri::command]
-pub fn get_pending_screenshot(app: AppHandle) -> Result<String, AppError> {
-  let s = app.state::<Mutex<AppState>>();
-  let mut state = s.lock_or_recover();
-  state.pending_screenshot_base64
-    .take()
-    .ok_or_else(|| AppError::Capture("No pending screenshot".to_string()))
-}
-
 /// Request screen recording permission on macOS.
 /// CGRequestScreenCaptureAccess adds the app to the list and shows a system
 /// dialog on first call. On subsequent calls it returns silently, so we also
@@ -666,7 +656,7 @@ async fn complete_region_capture_inner(
   }
 
   let result = finalize_capture_with_toggle(app, &image, toggle_save);
-  eprintln!("[timing] finalize done: {:?}", t0.elapsed());
+  eprintln!("[timing] *** TOTAL mouse-up → clipboard: {:?} ***", t0.elapsed());
   result
 }
 

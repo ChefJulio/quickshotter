@@ -29,6 +29,21 @@ pub fn create_overlay_window(
   #[cfg(not(target_os = "macos"))]
   let start_visible = mode != CaptureMode::Freeze;
 
+  // macOS: xcap returns logical points, and Tauri/winit expect logical coords.
+  // Windows: coordinates are physical pixels.
+  #[cfg(target_os = "macos")]
+  let attrs = WindowAttributes::default()
+    .with_title("QuickShotter Overlay")
+    .with_visible(start_visible)
+    .with_transparent(transparent)
+    .with_decorations(false)
+    .with_resizable(false)
+    .with_window_level(WindowLevel::AlwaysOnTop)
+    .with_position(winit::dpi::LogicalPosition::new(origin_x, origin_y))
+    .with_inner_size(winit::dpi::LogicalSize::new(bounds_w, bounds_h))
+    .with_cursor(CursorIcon::Crosshair);
+
+  #[cfg(not(target_os = "macos"))]
   let attrs = WindowAttributes::default()
     .with_title("QuickShotter Overlay")
     .with_visible(start_visible)
@@ -83,12 +98,26 @@ fn apply_macos_fixups(window: &Window) {
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.activate();
 
-    // Make the window accept keyboard and mouse events
-    let _: () = msg_send![ns_window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
-    // Set window level above everything (NSStatusWindowLevel = 25)
-    let _: () = msg_send![ns_window, setLevel: 25_i64];
+    // Ensure transparent compositing works
+    let _: () = msg_send![ns_window, setOpaque: false];
+    // NSColor.clearColor
+    let clear_color: *mut AnyObject = msg_send![objc2::class!(NSColor), clearColor];
+    let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+
+    // NSWindowCollectionBehavior: canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8)
+    let behavior: u64 = (1 << 0) | (1 << 8);
+    let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+
+    // Set window level above everything (CGShieldingWindowLevel area, 1000+)
+    // kCGScreenSaverWindowLevel = 1000 — above all normal windows
+    let _: () = msg_send![ns_window, setLevel: 1000_i64];
+
     // Accept mouse events even when app is not frontmost
     let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: true];
+
+    // Force to front — orderFrontRegardless bypasses activation checks
+    let _: () = msg_send![ns_window, orderFrontRegardless];
+    let _: () = msg_send![ns_window, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
   }
 }
 

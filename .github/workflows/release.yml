@@ -39,7 +39,9 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: |
+            ./src-tauri -> target
+            ./overlay -> target
 
       - name: Install dependencies
         run: npm ci
@@ -72,14 +74,13 @@ jobs:
       - name: Build overlay daemon
         shell: bash
         run: |
+          mkdir -p src-tauri/binaries
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             cargo build --release --manifest-path overlay/Cargo.toml --target aarch64-apple-darwin
-            mkdir -p src-tauri/target/aarch64-apple-darwin/release/
-            cp overlay/target/aarch64-apple-darwin/release/quickshotter-overlay src-tauri/target/aarch64-apple-darwin/release/ || true
+            cp overlay/target/aarch64-apple-darwin/release/quickshotter-overlay src-tauri/binaries/quickshotter-overlay-aarch64-apple-darwin
           else
             cargo build --release --manifest-path overlay/Cargo.toml
-            mkdir -p src-tauri/target/release/
-            cp overlay/target/release/quickshotter-overlay.exe src-tauri/target/release/ || true
+            cp overlay/target/release/quickshotter-overlay.exe src-tauri/binaries/quickshotter-overlay-x86_64-pc-windows-msvc.exe
           fi
 
       - name: Build Tauri app

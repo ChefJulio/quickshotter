@@ -488,7 +488,14 @@ pub fn has_screen_recording_permission() -> bool {
   extern "C" {
     fn CGPreflightScreenCaptureAccess() -> bool;
   }
-  unsafe { CGPreflightScreenCaptureAccess() }
+  let result = unsafe { CGPreflightScreenCaptureAccess() };
+  // Debug builds: CGPreflight is unreliable for unsigned binaries.
+  // Skip the check and let blank-capture detection handle revoked permission.
+  if !result && cfg!(debug_assertions) {
+    eprintln!("[permission] CGPreflightScreenCaptureAccess=false (unsigned dev build, bypassing)");
+    return true;
+  }
+  result
 }
 
 /// Request screen recording permission on macOS.

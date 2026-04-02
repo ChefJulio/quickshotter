@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 ~/
+
+# Overlay daemon sidecar binaries (built by CI or locally)
+src-tauri/binaries/

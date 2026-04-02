@@ -77,7 +77,6 @@ pub fn run() {
       commands::cancel_capture,
       commands::get_overlay_mode,
       commands::get_overlay_origin,
-      commands::get_pending_screenshot,
       commands::request_permission,
       commands::check_permission,
       commands::complete_onboarding,

@@ -6,8 +6,8 @@ Tauri 2 desktop app (Rust + TypeScript) for screen capture on Windows and macOS.
 ## Architecture
 - `src-tauri/` — Rust backend (Tauri app, capture logic, hotkeys, overlay, recording)
 - `src/` — TypeScript frontend (settings UI, overlay canvas, annotation editor)
-- `overlay/` — Separate Rust binary for GPU-accelerated overlay (Windows only; macOS uses webview overlay)
-- Overlay daemon is Windows-only. macOS uses a Tauri webview window (`overlay.html`) instead.
+- `overlay/` — Separate Rust binary for GPU-accelerated overlay (both Windows and macOS)
+- Overlay daemon uses wgpu: Vulkan on Windows, Metal on macOS. Communicates via stdin/stdout JSON.
 
 ## Release / Push / Build Checklist
 
@@ -32,8 +32,8 @@ Tauri 2 desktop app (Rust + TypeScript) for screen capture on Windows and macOS.
 ## macOS-Specific Notes
 - Screen recording permission is handled via onboarding welcome window on first launch
 - `CGRequestScreenCaptureAccess()` is only called when user clicks "Grant Access" (never on startup)
-- The overlay uses a webview (Tauri window with `overlay.html`), NOT the native daemon
-- `xcap` returns logical points on macOS — no scale factor conversion needed for Tauri window positioning
+- The overlay uses the native GPU daemon (Metal backend), same as Windows
+- `xcap` returns logical points on macOS — overlay daemon uses LogicalPosition/LogicalSize
 - Permission check (`CGPreflightScreenCaptureAccess`) is unreliable for unsigned dev builds
 
 ## Build Commands
