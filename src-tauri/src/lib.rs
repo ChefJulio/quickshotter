@@ -181,6 +181,39 @@ pub fn run() {
       // Pre-create settings window hidden so it opens instantly on first click.
       commands::precreate_settings_window(&app.handle());
 
+      // Check for updates in the background. If a new version is available,
+      // show a non-intrusive system notification directing to Settings > About.
+      let update_handle = app.handle().clone();
+      tauri::async_runtime::spawn(async move {
+        // Small delay so we don't compete with startup I/O
+        tauri::async_runtime::spawn(async {
+          std::thread::sleep(std::time::Duration::from_secs(5));
+        }).await.ok();
+        use tauri_plugin_updater::UpdaterExt;
+        let updater = match update_handle.updater() {
+          Ok(u) => u,
+          Err(e) => { eprintln!("[updater] init failed: {e}"); return; }
+        };
+        match updater.check().await {
+          Ok(Some(update)) => {
+            eprintln!("[updater] new version available: {}", update.version);
+            use tauri_plugin_notification::NotificationExt;
+            update_handle.notification()
+              .builder()
+              .title("QuickShotter update available")
+              .body(&format!("v{} is ready — open Settings > About to update.", update.version))
+              .show()
+              .ok();
+          }
+          Ok(None) => {
+            eprintln!("[updater] up to date");
+          }
+          Err(e) => {
+            eprintln!("[updater] check failed: {e}");
+          }
+        }
+      });
+
       use tauri_plugin_notification::NotificationExt;
       if let Err(e) = hotkeys::register_hotkeys(&app.handle()) {
         eprintln!("Failed to register hotkeys: {e}");
