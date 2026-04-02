@@ -168,7 +168,8 @@ impl FreezeRenderer {
       uniform_buf,
       viewport_w,
       viewport_h,
-      last_selection: None,
+      // Sentinel ensures first frame always renders
+      last_selection: Some((-2.0, -2.0, -2.0, -2.0)),
     })
   }
 
@@ -364,7 +365,9 @@ impl LiveGpuRenderer {
       viewport_w,
       viewport_h,
       dim_alpha,
-      last_selection: None,
+      // Sentinel value: Some((-2,-2,-2,-2)) ensures the first frame always renders
+      // (it will never match the real selection which starts as None).
+      last_selection: Some((-2.0, -2.0, -2.0, -2.0)),
     })
   }
 
