@@ -54,8 +54,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     && !(px.x >= (u.sel_min.x + bw) && px.x <= (u.sel_max.x - bw)
       && px.y >= (u.sel_min.y + bw) && px.y <= (u.sel_max.y - bw));
 
-  // Border color: #00aaff, pre-multiplied alpha
+  // Border color: red (#ff3c3c) for recording border (dim_alpha=0), blue (#00aaff) otherwise
   if on_border {
+    if u.dim_alpha < 0.01 {
+      return vec4<f32>(1.0, 0.235, 0.235, 1.0);
+    }
     return vec4<f32>(0.0, 0.667, 1.0, 1.0);
   }
 

@@ -16,6 +16,28 @@ pub struct ScreenCapture {
   pub height: u32,
 }
 
+/// Get the Retina scale factor for the main screen.
+/// Captures a 1x1 region to compare physical vs logical dimensions.
+/// Result is cached after first call.
+#[cfg(target_os = "macos")]
+pub fn get_retina_scale() -> f64 {
+  use std::sync::atomic::{AtomicU64, Ordering};
+  static CACHED: AtomicU64 = AtomicU64::new(0);
+  let cached = f64::from_bits(CACHED.load(Ordering::Relaxed));
+  if cached > 0.5 { return cached; }
+
+  let scale = (|| -> Option<f64> {
+    // Capture a small region to detect physical pixel scale
+    let img = capture_region(0, 0, 10, 10).ok()?;
+    let physical_scale = img.width() as f64 / 10.0;
+    eprintln!("[retina] 10px capture → {}px, scale={physical_scale}", img.width());
+    if physical_scale > 1.01 { Some(physical_scale) } else { Some(1.0) }
+  })().unwrap_or(2.0);
+
+  CACHED.store(scale.to_bits(), Ordering::Relaxed);
+  scale
+}
+
 /// Virtual desktop bounds (no image capture -- fast).
 pub struct DesktopBounds {
   pub x: i32,

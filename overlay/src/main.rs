@@ -32,6 +32,8 @@ use window_detect::WindowDetector;
 
 enum StdinMsg {
   Capture(CaptureRequest),
+  ShowBorder(protocol::BorderRequest),
+  HideBorder,
   Cancel,
   Quit,
 }
@@ -42,19 +44,17 @@ fn main() {
   // events because macOS doesn't deliver events to background processes.
   #[cfg(target_os = "macos")]
   {
-    use objc2::msg_send;
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
     unsafe {
       let mtm = objc2::MainThreadMarker::new_unchecked();
       let app = NSApplication::sharedApplication(mtm);
-      // Start as Regular to initialize the event loop, then switch to
-      // Accessory so we don't appear in Cmd+Tab / Dock.
+      // Regular policy required for winit event loop to work, then switch
+      // to Accessory to hide from Cmd+Tab. Activation happens per-capture
+      // in apply_macos_fixups when the window is shown.
       app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
       app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-      // Force-activate so we still get events despite being Accessory
-      let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
     }
-    eprintln!("[daemon] NSApp activated (Accessory + forced)");
+    eprintln!("[daemon] NSApp initialized (Accessory)");
   }
 
   let gpu = match GpuContext::init() {
@@ -100,6 +100,14 @@ fn stdin_reader(tx: mpsc::Sender<StdinMsg>, proxy: winit::event_loop::EventLoopP
         eprintln!("[overlay-daemon] capture command: mode={:?}", req.mode);
         if tx.send(StdinMsg::Capture(req)).is_err() { break; }
       }
+      Ok(Command::ShowBorder(req)) => {
+        eprintln!("[overlay-daemon] show_border: {}x{} at ({},{})", req.width, req.height, req.x, req.y);
+        if tx.send(StdinMsg::ShowBorder(req)).is_err() { break; }
+      }
+      Ok(Command::HideBorder) => {
+        eprintln!("[overlay-daemon] hide_border");
+        let _ = tx.send(StdinMsg::HideBorder);
+      }
       Ok(Command::Cancel) => { let _ = tx.send(StdinMsg::Cancel); }
       Ok(Command::Quit) => {
         let _ = tx.send(StdinMsg::Quit);
@@ -135,6 +143,11 @@ enum ActiveRenderer {
 
 enum AppState {
   Idle,
+  /// Recording border — click-through window showing a red border.
+  Border {
+    window: Arc<winit::window::Window>,
+    renderer: LiveGpuRenderer,
+  },
   Active {
     window: Arc<winit::window::Window>,
     renderer: ActiveRenderer,
@@ -159,6 +172,8 @@ impl OverlayApp {
     while let Ok(msg) = self.rx.try_recv() {
       match msg {
         StdinMsg::Capture(req) => self.start_capture(event_loop, req),
+        StdinMsg::ShowBorder(req) => self.show_border(event_loop, req),
+        StdinMsg::HideBorder => self.hide_border(),
         StdinMsg::Cancel => self.cancel_capture(),
         StdinMsg::Quit => {
           self.cancel_capture();
@@ -313,6 +328,78 @@ impl OverlayApp {
     }
   }
 
+  /// Show a click-through recording border. Uses the GPU live renderer with a
+  /// fixed selection rect so the shader draws the blue/red border.
+  fn show_border(&mut self, event_loop: &ActiveEventLoop, req: protocol::BorderRequest) {
+    // Hide any existing border
+    self.hide_border();
+
+    let win = match window::create_overlay_window(
+      event_loop, req.origin_x, req.origin_y, req.bounds_w, req.bounds_h,
+      CaptureMode::Live, // transparent window
+    ) {
+      Ok(w) => Arc::new(w),
+      Err(e) => { eprintln!("[overlay-daemon] border window failed: {e}"); return; }
+    };
+
+    let mut renderer = match LiveGpuRenderer::new(&self.gpu, Arc::clone(&win), 0.0) {
+      Ok(r) => r,
+      Err(e) => { eprintln!("[overlay-daemon] border renderer failed: {e}"); return; }
+    };
+
+    // Create a fake interaction with a fixed selection to render the border.
+    // The shader operates in physical pixels (surface size), but coords are
+    // logical. Multiply by the window's scale factor.
+    // Expand the selection by the border width (2px shader + 2px gap) so the
+    // visible border sits OUTSIDE the capture area, not inside it.
+    let scale = win.scale_factor() as f32;
+    let bw = 4.0 * scale; // border width + gap in physical pixels
+    let px = req.x as f32 * scale - bw;
+    let py = req.y as f32 * scale - bw;
+    let pw = req.width as f32 * scale + bw * 2.0;
+    let ph = req.height as f32 * scale + bw * 2.0;
+    let mut interaction = Interaction::new(CaptureMode::RecordRegion);
+    interaction.mouse_down(px, py);
+    interaction.mouse_move(px + pw, py + ph);
+    // Don't call mouse_up — keep it in Dragging phase so selection() returns the rect
+
+    renderer.render(&self.gpu, &interaction);
+    win.set_visible(true);
+
+    // Make click-through on macOS
+    #[cfg(target_os = "macos")]
+    {
+      use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+      if let Ok(handle) = win.window_handle() {
+        if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+          unsafe {
+            let ns_view = h.ns_view.as_ptr() as *mut objc2::runtime::AnyObject;
+            let ns_window: *mut objc2::runtime::AnyObject = objc2::msg_send![ns_view, window];
+            if !ns_window.is_null() {
+              let _: () = objc2::msg_send![ns_window, setIgnoresMouseEvents: true];
+            }
+          }
+        }
+      }
+    }
+
+    eprintln!("[overlay-daemon] border shown: {}x{} at ({},{})", req.width, req.height, req.x, req.y);
+    self.state = AppState::Border { window: win, renderer };
+  }
+
+  fn hide_border(&mut self) {
+    if let AppState::Border { ref window, .. } = self.state {
+      // On macOS, set_visible(false) may not reliably hide the window.
+      // Move it off-screen and then drop it.
+      window.set_outer_position(winit::dpi::PhysicalPosition::new(-10000i32, -10000i32));
+      window.set_visible(false);
+      eprintln!("[overlay-daemon] border hidden");
+    }
+    if matches!(self.state, AppState::Border { .. }) {
+      self.state = AppState::Idle;
+    }
+  }
+
   fn finish_capture(&mut self) {
     let result = match &self.state {
       AppState::Active { interaction, mode, origin_x, origin_y, .. } => {
@@ -345,7 +432,7 @@ impl OverlayApp {
           None
         }
       }
-      AppState::Idle => None,
+      AppState::Idle | AppState::Border { .. } => None,
     };
 
     if let Some(result) = result {
@@ -353,6 +440,18 @@ impl OverlayApp {
       eprintln!("[timing][daemon] mouse-up → finish_capture entered");
       self.state = AppState::Idle;
       eprintln!("[timing][daemon] window destroyed: {:?}", t_finish.elapsed());
+
+      // Deactivate daemon so macOS returns focus to the previous app.
+      #[cfg(target_os = "macos")]
+      {
+        use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+        unsafe {
+          let mtm = objc2::MainThreadMarker::new_unchecked();
+          let app = NSApplication::sharedApplication(mtm);
+          app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
+          app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        }
+      }
       #[cfg(target_os = "windows")]
       {
         use windows::Win32::Graphics::Dwm::DwmFlush;
@@ -553,7 +652,7 @@ impl ApplicationHandler<()> for OverlayApp {
     let mut needs_finish = false;
 
     match &mut self.state {
-      AppState::Idle => return,
+      AppState::Idle | AppState::Border { .. } => return,
       AppState::Active { window, interaction, .. } => match event {
         WindowEvent::RedrawRequested => {
           // Handled below after releasing the borrow

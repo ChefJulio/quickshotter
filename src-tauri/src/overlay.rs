@@ -29,6 +29,17 @@ enum DaemonCommand {
     bounds_w: u32,
     bounds_h: u32,
   },
+  ShowBorder {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    origin_x: i32,
+    origin_y: i32,
+    bounds_w: u32,
+    bounds_h: u32,
+  },
+  HideBorder,
   #[allow(dead_code)]
   Cancel,
   Quit,
@@ -182,6 +193,30 @@ pub fn shutdown_daemon() {
 pub fn open_overlay(app: &AppHandle) -> Result<(), AppError> {
   let mode = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_mode.clone();
   open_overlay_with_mode(app, &mode)
+}
+
+/// Show a GPU-rendered click-through recording border via the overlay daemon.
+pub fn show_recording_border(x: i32, y: i32, width: u32, height: u32, bounds: &capture::DesktopBounds) {
+  let cmd = DaemonCommand::ShowBorder {
+    x, y, width, height,
+    origin_x: bounds.x, origin_y: bounds.y,
+    bounds_w: bounds.width, bounds_h: bounds.height,
+  };
+  if let Ok(mut guard) = get_daemon() {
+    if let Some(daemon) = guard.as_mut() {
+      daemon.send(&cmd).ok();
+    }
+  }
+}
+
+/// Hide the recording border.
+pub fn hide_recording_border() {
+  let cmd = DaemonCommand::HideBorder;
+  if let Ok(mut guard) = get_daemon() {
+    if let Some(daemon) = guard.as_mut() {
+      daemon.send(&cmd).ok();
+    }
+  }
 }
 
 pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppError> {
@@ -425,8 +460,44 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
     DaemonResult::RecordRegion { x, y, width, height } => {
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
-        eprintln!("Record region: {}x{} at ({}, {})", width, height, x, y);
+        // Daemon returns screen-space coordinates (physical pixels on Windows,
+        // physical pixels on macOS too since winit CursorMoved gives physical).
+        // On macOS, convert to logical points since xcap and the recording
+        // pipeline use logical coordinates.
+        #[cfg(target_os = "macos")]
+        let (rx, ry, rw, rh) = {
+          let scale = crate::capture::get_retina_scale();
+          let rx = (x as f64 / scale) as u32;
+          let ry = (y as f64 / scale) as u32;
+          let rw = (width as f64 / scale) as u32;
+          let rh = (height as f64 / scale) as u32;
+          eprintln!("[recording] daemon region (physical): {}x{} at ({}, {}), scale={scale}", width, height, x, y);
+          eprintln!("[recording] converted to logical: {}x{} at ({}, {})", rw, rh, rx, ry);
+          (rx, ry, rw, rh)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (rx, ry, rw, rh) = (x.max(0) as u32, y.max(0) as u32, width, height);
+
+        // Close the daemon overlay BEFORE starting recording — the overlay
+        // window is invisible but still captures mouse events, causing the
+        // double-click-to-interact issue.
         close_overlay(&app);
+
+        // Position indicator above the recording region (logical coords for Tauri)
+        let indicator_x = Some(x as f64 / {
+          #[cfg(target_os = "macos")] { crate::capture::get_retina_scale() }
+          #[cfg(not(target_os = "macos"))] { 1.0 }
+        });
+        let indicator_y = Some(y as f64 / {
+          #[cfg(target_os = "macos")] { crate::capture::get_retina_scale() }
+          #[cfg(not(target_os = "macos"))] { 1.0 }
+        });
+
+        if let Err(e) = crate::commands::start_region_recording(
+          app.clone(), rx, ry, rw, rh, indicator_x, indicator_y,
+        ).await {
+          eprintln!("[recording] start failed: {e}");
+        }
       });
     }
     DaemonResult::SelectScreen { monitor_index } => {

@@ -16,8 +16,6 @@ html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 13px;
   color: #fff;
-  cursor: move;
-  -webkit-app-region: drag;
 }
 .dot {
   width: 10px;
@@ -35,7 +33,6 @@ html, body {
   min-width: 48px;
 }
 .stop-btn {
-  -webkit-app-region: no-drag;
   background: #ff3c3c;
   color: #fff;
   border: none;

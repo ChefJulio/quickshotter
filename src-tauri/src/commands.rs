@@ -1558,11 +1558,43 @@ fn open_recording_indicator(app: &AppHandle, pos: Option<(f64, f64)>) {
     // Position above the recording region's top-left corner
     builder = builder.position(x, (y - 42.0).max(0.0));
   }
-  builder.build().ok();
+  if let Ok(win) = builder.build() {
+    win.set_focus().ok();
+  }
 }
 
 fn close_recording_indicator(app: &AppHandle) {
   if let Some(win) = app.get_webview_window("recording-indicator") {
+    win.destroy().ok();
+  }
+}
+
+/// Show a click-through red dashed border around the recording region.
+fn open_recording_border(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) {
+  if app.get_webview_window("recording-border").is_some() { return; }
+  let pad = 4.0; // border sits just outside the capture region
+  match WebviewWindowBuilder::new(app, "recording-border", WebviewUrl::App("recording-border.html".into()))
+    .title("")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    .position(x - pad, y - pad)
+    .inner_size(w + pad * 2.0, h + pad * 2.0)
+    .build()
+  {
+    Ok(win) => {
+      // Make click-through so it doesn't interfere with user interaction
+      win.set_ignore_cursor_events(true).ok();
+    }
+    Err(e) => eprintln!("[recording] border window failed: {e}"),
+  }
+}
+
+fn close_recording_border(app: &AppHandle) {
+  if let Some(win) = app.get_webview_window("recording-border") {
     win.destroy().ok();
   }
 }
@@ -1647,6 +1679,7 @@ pub struct RecordingStateDto {
 #[tauri::command]
 pub async fn toggle_recording(app: AppHandle) -> Result<RecordingResultDto, AppError> {
   let is_recording = app.state::<Mutex<AppState>>().lock_or_recover().is_recording;
+  eprintln!("[recording] toggle_recording called, is_recording={is_recording}");
 
   if is_recording {
     return stop_recording(app).await;
@@ -1794,6 +1827,16 @@ pub async fn start_region_recording(
   };
   open_recording_indicator(&app, indicator_pos);
 
+  // Show a red dashed border around the recording region.
+  // x/y/width/height are already in logical coordinates (converted by caller on macOS).
+  let border_x = bounds.x as f64 + x as f64;
+  let border_y = bounds.y as f64 + y as f64;
+  let border_w = width as f64;
+  let border_h = height as f64;
+  // Show recording border via the GPU overlay daemon (click-through, native).
+  let bounds = capture::DesktopBounds { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  overlay::show_recording_border(x as i32, y as i32, width, height, &bounds);
+
   Ok(())
 }
 
@@ -1859,12 +1902,16 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
         eprintln!("recording: pipeline error: {e}");
         // Still clean up windows on error
         close_recording_indicator(&app);
+        overlay::hide_recording_border();
         return Err(e);
       }
     }
   } else {
     None
   };
+
+  // Hide recording border immediately when recording stops
+  overlay::hide_recording_border();
 
   // The indicator manages its own lifecycle (shows "Saved" for ~4s then destroys).
   // Safety net: if JS fails to close it, Rust cleans up after 6s.
@@ -1874,6 +1921,7 @@ pub async fn stop_recording(app: AppHandle) -> Result<RecordingResultDto, AppErr
       std::thread::sleep(std::time::Duration::from_secs(6));
     }).await;
     close_recording_indicator(&app2);
+    overlay::hide_recording_border();
   });
 
   Ok(RecordingResultDto {

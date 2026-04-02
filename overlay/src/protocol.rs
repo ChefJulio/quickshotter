@@ -8,8 +8,24 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
   Capture(CaptureRequest),
+  /// Show a click-through border around a recording region.
+  ShowBorder(BorderRequest),
+  /// Hide the recording border.
+  HideBorder,
   Cancel,
   Quit,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BorderRequest {
+  pub x: i32,
+  pub y: i32,
+  pub width: u32,
+  pub height: u32,
+  pub origin_x: i32,
+  pub origin_y: i32,
+  pub bounds_w: u32,
+  pub bounds_h: u32,
 }
 
 #[derive(Debug, Deserialize)]

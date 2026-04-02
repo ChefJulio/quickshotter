@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "QuickShotter default capabilities",
-  "windows": ["settings", "overlay", "annotation"],
+  "windows": ["settings", "overlay", "annotation", "recording-indicator", "recording-border"],
   "permissions": [
     "core:default",
     "core:app:default",

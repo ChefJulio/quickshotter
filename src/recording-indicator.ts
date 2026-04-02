@@ -62,14 +62,19 @@ async function init() {
     }, 1000);
   }
 
-  closeBtn.addEventListener('click', closeWindow);
+  closeBtn.addEventListener('click', () => {
+    console.log('[indicator] close-btn clicked');
+    closeWindow();
+  });
 
   cancelBtn.addEventListener('click', async () => {
+    console.log('[indicator] cancel-btn (x) clicked');
     stoppingManually = true;
     cancelBtn.textContent = '...';
     try {
       await invoke('stop_recording');
-    } catch { /* already stopped */ }
+      console.log('[indicator] stop_recording returned');
+    } catch (e) { console.log('[indicator] stop_recording error:', e); }
     closeWindow();
   });
 
@@ -81,15 +86,25 @@ async function init() {
   });
 
   stopBtn.addEventListener('click', async () => {
+    console.log('[indicator] stop-btn clicked');
     stoppingManually = true;
     stopBtn.textContent = '...';
     try {
       const result = await invoke<{ filepath: string | null }>('stop_recording');
+      console.log('[indicator] stop_recording result:', result);
       showSavedState(result?.filepath ?? null);
     } catch (e) {
-      console.error('Stop recording failed:', e);
+      console.error('[indicator] Stop recording failed:', e);
       closeWindow();
     }
+  });
+
+  // Debug: track focus state
+  window.addEventListener('focus', () => console.log('[indicator] window focused'));
+  window.addEventListener('blur', () => console.log('[indicator] window blurred'));
+  document.addEventListener('mousedown', (e) => {
+    const target = e.target as HTMLElement;
+    console.log('[indicator] mousedown on:', target.tagName, target.className, target.id);
   });
 
   // Escape key stops recording
