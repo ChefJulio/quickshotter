@@ -712,7 +712,19 @@ async fn complete_region_capture_live(
   // No compositor wait needed — the daemon called DwmFlush() before sending
   // the result, guaranteeing the overlay window is fully removed.
 
-  // Capture just the selected region via BitBlt
+  // On macOS, daemon returns physical pixels but CGWindowListCreateImage
+  // expects logical points. Divide by Retina scale factor.
+  #[cfg(target_os = "macos")]
+  let (screen_x, screen_y, w, h) = {
+    let scale = capture::get_retina_scale();
+    let sx = (screen_x as f64 / scale) as i32;
+    let sy = (screen_y as f64 / scale) as i32;
+    let sw = (w as f64 / scale) as u32;
+    let sh = (h as f64 / scale) as u32;
+    (sx, sy, sw, sh)
+  };
+
+  // Capture just the selected region via BitBlt / CGWindowListCreateImage
   let image = capture::capture_region(screen_x, screen_y, w, h)?;
   eprintln!("[timing] region BitBlt ({}x{}): {:?}", w, h, t0.elapsed());
 
