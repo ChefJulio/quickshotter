@@ -1527,11 +1527,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     const safeTop = Math.max(8, ((window.screen as any).availTop || 0) + 8);
     toolbar.style.top = `${safeTop}px`;
 
-    // Load raw RGBA bytes via Tauri IPC as base64 — bypasses CSP/asset protocol.
-    const [b64Data, width, height] = await invoke<[string, number, number]>('get_pending_annotation_data');
-    const binaryStr = atob(b64Data);
-    const bytes = new Uint8ClampedArray(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    // Load raw RGBA bytes via Tauri IPC — Vec<u8> transfers as ArrayBuffer.
+    // No fetch, no CSP, no encoding. Just raw pixel memcpy over IPC.
+    const [rawBytes, width, height] = await invoke<[number[], number, number]>('get_pending_annotation_data');
+    const bytes = new Uint8ClampedArray(rawBytes);
 
     const rawCanvas = document.createElement('canvas');
     rawCanvas.width = width;
