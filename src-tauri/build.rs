@@ -25,5 +25,13 @@ fn main() {
             .compile("ocr_mac");
 
         println!("cargo:rustc-link-lib=framework=Vision");
+
+        // Compile notification delegate (forces banners when app is frontmost)
+        cc::Build::new()
+            .file("src/notification_mac.m")
+            .flag("-fobjc-arc")
+            .compile("notification_mac");
+
+        println!("cargo:rustc-link-lib=framework=UserNotifications");
     }
 }

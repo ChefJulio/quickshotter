@@ -108,6 +108,18 @@ pub fn run() {
       commands::upload_last_to_imgur,
     ])
     .setup(|app| {
+      // macOS: install notification delegate so banners show even when
+      // QuickShotter is the frontmost app (tray apps can be "frontmost"
+      // after overlay daemon activation).
+      // macOS release only: install notification delegate so banners show
+      // even when app is frontmost. Requires a proper app bundle (crashes
+      // in dev builds where the binary isn't bundled).
+      #[cfg(all(target_os = "macos", not(debug_assertions)))]
+      {
+        extern "C" { fn qs_install_notification_delegate(); }
+        unsafe { qs_install_notification_delegate(); }
+      }
+
       let config = config::load_config(&app.handle());
       let launch_on_startup = config.launch_on_startup;
       let explorer_ctx_menu = config.explorer_context_menu;
