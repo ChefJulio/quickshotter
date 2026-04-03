@@ -1530,9 +1530,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Load raw RGBA bytes directly — no encoding/decoding overhead.
     // Rust writes raw pixels to disk (~5ms), JS creates ImageData from them.
     const [filePath, imgW, imgH] = await invoke<[string, number, number]>('get_pending_annotation');
+    console.log(`[annotation] loading raw RGBA: ${filePath} (${imgW}x${imgH})`);
     const assetUrl = convertFileSrc(filePath);
+    console.log(`[annotation] asset URL: ${assetUrl}`);
     const response = await fetch(assetUrl);
+    if (!response.ok) {
+      console.error(`[annotation] fetch failed: ${response.status} ${response.statusText}`);
+      cancelAnnotation();
+      return;
+    }
     const buffer = await response.arrayBuffer();
+    console.log(`[annotation] loaded ${buffer.byteLength} bytes, expected ${imgW * imgH * 4}`);
 
     // Create canvas with raw pixel data — zero encoding
     const rawCanvas = document.createElement('canvas');
