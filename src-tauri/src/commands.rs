@@ -1127,6 +1127,28 @@ pub fn get_pending_annotation(app: AppHandle) -> Result<(String, u32, u32), AppE
   Ok((path, w, h))
 }
 
+/// Return raw RGBA pixel data as base64 for the annotation image via IPC.
+/// Bypasses CSP/asset protocol issues entirely.
+#[tauri::command]
+pub fn get_pending_annotation_data(app: AppHandle) -> Result<(String, u32, u32), AppError> {
+  let t0 = std::time::Instant::now();
+  let s = app.state::<Mutex<AppState>>();
+  let state = s.lock_or_recover();
+  let path = state.pending_annotation_path
+    .as_ref()
+    .ok_or_else(|| AppError::Annotation("No pending annotation image".to_string()))?;
+  let (w, h) = state.pending_annotation
+    .as_ref()
+    .map(|img| (img.width(), img.height()))
+    .unwrap_or((0, 0));
+  let data = std::fs::read(path)
+    .map_err(|e| AppError::Annotation(format!("Failed to read annotation file: {e}")))?;
+  use base64::Engine;
+  let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+  eprintln!("[timing] annotation IPC base64 encode ({} bytes → {} chars): {:?}", data.len(), b64.len(), t0.elapsed());
+  Ok((b64, w, h))
+}
+
 /// Annotation editor: fetch modifier-to-tool config.
 #[tauri::command]
 pub fn get_annotation_config(app: AppHandle) -> AnnotationConfigDto {

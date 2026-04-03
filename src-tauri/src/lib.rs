@@ -90,6 +90,7 @@ pub fn run() {
       commands::get_window_at_cursor,
       commands::complete_window_capture,
       commands::get_pending_annotation,
+      commands::get_pending_annotation_data,
       commands::get_annotation_config,
       commands::save_annotated_capture,
       commands::cancel_annotation,

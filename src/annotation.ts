@@ -1527,32 +1527,22 @@ window.addEventListener('DOMContentLoaded', async () => {
     const safeTop = Math.max(8, ((window.screen as any).availTop || 0) + 8);
     toolbar.style.top = `${safeTop}px`;
 
-    // Load raw RGBA bytes directly — no encoding/decoding overhead.
-    // Rust writes raw pixels to disk (~5ms), JS creates ImageData from them.
-    const [filePath, imgW, imgH] = await invoke<[string, number, number]>('get_pending_annotation');
-    console.log(`[annotation] loading raw RGBA: ${filePath} (${imgW}x${imgH})`);
-    const assetUrl = convertFileSrc(filePath);
-    console.log(`[annotation] asset URL: ${assetUrl}`);
-    const response = await fetch(assetUrl);
-    if (!response.ok) {
-      console.error(`[annotation] fetch failed: ${response.status} ${response.statusText}`);
-      cancelAnnotation();
-      return;
-    }
-    const buffer = await response.arrayBuffer();
-    console.log(`[annotation] loaded ${buffer.byteLength} bytes, expected ${imgW * imgH * 4}`);
+    // Load raw RGBA bytes via Tauri IPC as base64 — bypasses CSP/asset protocol.
+    const [b64Data, width, height] = await invoke<[string, number, number]>('get_pending_annotation_data');
+    const binaryStr = atob(b64Data);
+    const bytes = new Uint8ClampedArray(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
-    // Create canvas with raw pixel data — zero encoding
     const rawCanvas = document.createElement('canvas');
-    rawCanvas.width = imgW;
-    rawCanvas.height = imgH;
+    rawCanvas.width = width;
+    rawCanvas.height = height;
     const rawCtx = rawCanvas.getContext('2d')!;
-    const imageData = new ImageData(new Uint8ClampedArray(buffer), imgW, imgH);
+    const imageData = new ImageData(bytes, width, height);
     rawCtx.putImageData(imageData, 0, 0);
 
     sourceImage = rawCanvas;
-    sourceWidth = imgW;
-    sourceHeight = imgH;
+    sourceWidth = width;
+    sourceHeight = height;
     computeLayout();
     render();
 
