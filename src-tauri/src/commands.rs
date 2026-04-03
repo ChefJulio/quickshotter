@@ -1532,7 +1532,10 @@ fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
   if let Some(fp) = filepath {
     builder = builder.extra("filepath", fp);
   }
-  builder.show().ok();
+  match builder.show() {
+    Ok(_) => eprintln!("[notification] sent: {title}"),
+    Err(e) => eprintln!("[notification] failed: {e}"),
+  }
 }
 
 // -- Imgur upload --
