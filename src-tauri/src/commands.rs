@@ -36,6 +36,18 @@ pub fn get_capture_delay(app: AppHandle) -> u32 {
   app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay
 }
 
+/// Temporarily unregister all global hotkeys (while recording a new hotkey).
+#[tauri::command]
+pub fn suspend_hotkeys(app: AppHandle) {
+  hotkeys::unregister_all(&app);
+}
+
+/// Re-register global hotkeys (after hotkey recording is done).
+#[tauri::command]
+pub fn resume_hotkeys(app: AppHandle) {
+  hotkeys::register_hotkeys(&app).ok();
+}
+
 #[tauri::command]
 pub fn get_overlay_mode(app: AppHandle) -> String {
   app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone()
@@ -1624,7 +1636,8 @@ fn build_pipeline_config(
   std::fs::create_dir_all(&folder)?;
 
   let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-  let filename = format!("recording_{}.{}", timestamp, ext);
+  let prefix = capture::sanitize_filename_part(&config.recording_prefix);
+  let filename = format!("{}_{}.{}", prefix, timestamp, ext);
   let output_path = folder.join(filename);
 
   Ok(crate::recording::PipelineConfig {

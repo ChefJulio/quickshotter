@@ -91,15 +91,18 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onCom
     state.recording = true;
     input.value = 'Press a key combination...';
     input.classList.add('recording');
+    invoke('suspend_hotkeys');
   });
 
-  input.addEventListener('blur', () => {
-    if (state.recording) {
-      state.recording = false;
-      input.value = formatHotkeyDisplay(state.rawValue);
-      input.classList.remove('recording');
-    }
-  });
+  function stopRecording() {
+    if (!state.recording) return;
+    state.recording = false;
+    input.value = formatHotkeyDisplay(state.rawValue);
+    input.classList.remove('recording');
+    invoke('resume_hotkeys');
+  }
+
+  input.addEventListener('blur', stopRecording);
 
   input.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!state.recording) return;
@@ -111,9 +114,7 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onCom
 
     // Escape cancels
     if (e.key === 'Escape') {
-      state.recording = false;
-      input.value = formatHotkeyDisplay(state.rawValue);
-      input.classList.remove('recording');
+      stopRecording();
       input.blur();
       return;
     }
@@ -135,9 +136,7 @@ function initHotkeyRecorder(input: HTMLInputElement, initialValue: string, onCom
 
     parts.push(keyStr);
     state.rawValue = parts.join('+');
-    state.recording = false;
-    input.value = formatHotkeyDisplay(state.rawValue);
-    input.classList.remove('recording');
+    stopRecording();
     input.blur();
     onComplete?.();
   });
@@ -232,6 +231,7 @@ let recordingFormatSelect: HTMLSelectElement;
 let recordingFpsSelect: HTMLSelectElement;
 let gifMaxDurationInput: HTMLInputElement;
 let gifMaxWidthInput: HTMLInputElement;
+let recordingPrefixInput: HTMLInputElement;
 
 let lastSavedConfig: AppConfig | null = null;
 
@@ -266,6 +266,7 @@ function collectConfig(): AppConfig {
     recording_fps: parseInt(recordingFpsSelect.value, 10),
     gif_max_duration: parseInt(gifMaxDurationInput.value, 10) || 15,
     gif_max_width: parseInt(gifMaxWidthInput.value, 10) || 800,
+    recording_prefix: recordingPrefixInput.value || 'recording',
   };
 }
 
@@ -305,6 +306,7 @@ function applyConfig(config: AppConfig) {
   recordingFpsSelect.value = String(config.recording_fps);
   gifMaxDurationInput.value = String(config.gif_max_duration);
   gifMaxWidthInput.value = String(config.gif_max_width);
+  recordingPrefixInput.value = config.recording_prefix;
 }
 
 function updateDelayState() {
@@ -390,6 +392,7 @@ window.addEventListener('DOMContentLoaded', () => {
   recordingFpsSelect = document.getElementById('recording-fps') as HTMLSelectElement;
   gifMaxDurationInput = document.getElementById('gif-max-duration') as HTMLInputElement;
   gifMaxWidthInput = document.getElementById('gif-max-width') as HTMLInputElement;
+  recordingPrefixInput = document.getElementById('recording-prefix') as HTMLInputElement;
 
   // Init hotkey recorders -- autoSave on recording complete
   regionHotkey = initHotkeyRecorder(regionHotkeyInput, '', autoSave);
@@ -404,7 +407,7 @@ window.addEventListener('DOMContentLoaded', () => {
     annotateCapturesCheckbox, launchOnStartupCheckbox, explorerContextMenuCheckbox,
     modDefaultSelect, modShiftSelect, modCtrlSelect, modAltSelect,
     modRightDefaultSelect, modRightShiftSelect, modRightCtrlSelect, modRightAltSelect,
-    recordingFormatSelect, recordingFpsSelect,
+    recordingFormatSelect, recordingFpsSelect, recordingPrefixInput,
   ];
   for (const el of immediateElements) {
     el.addEventListener('change', autoSave);
@@ -587,6 +590,7 @@ function applyDefaults(current: AppConfig, defaults: AppConfig, section: string)
     merged.recording_fps = defaults.recording_fps;
     merged.gif_max_duration = defaults.gif_max_duration;
     merged.gif_max_width = defaults.gif_max_width;
+    merged.recording_prefix = defaults.recording_prefix;
   }
   if (section === 'annotations' || section === 'all') {
     merged.annotate_captures = defaults.annotate_captures;

@@ -100,6 +100,16 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
           });
         }
+        "mode_live" | "mode_freeze" => {
+          let new_mode = if event.id().as_ref() == "mode_live" { "live" } else { "freeze" };
+          {
+            let s = app.state::<Mutex<AppState>>();
+            let mut state = s.lock_or_recover();
+            state.config.capture_mode = new_mode.to_string();
+            crate::config::save_config(&app, &state.config).ok();
+          }
+          refresh_tray_menu(&app);
+        }
         "settings" => {
           crate::commands::show_settings_window(&app);
         }
@@ -160,6 +170,16 @@ pub fn build_tray_menu(
   };
   builder = builder.item(&record_sub);
 
+  // Capture Mode submenu
+  let is_live = config.capture_mode == "live";
+  let mode_sub = SubmenuBuilder::with_id(app, "mode_menu", "Capture Mode")
+    .item(&MenuItemBuilder::with_id("mode_live",
+      &format!("{} Live", if is_live { "●" } else { "○" })).build(app)?)
+    .item(&MenuItemBuilder::with_id("mode_freeze",
+      &format!("{} Freeze", if !is_live { "●" } else { "○" })).build(app)?)
+    .build()?;
+  builder = builder.item(&mode_sub);
+
   // Recent captures submenu
   if !history.is_empty() {
     let mut recent = SubmenuBuilder::with_id(app, "recent_menu", "Recent");
@@ -197,6 +217,7 @@ pub fn refresh_tray_menu(app: &AppHandle) {
       hotkey_fullscreen: state.config.hotkey_fullscreen.clone(),
       hotkey_ocr: state.config.hotkey_ocr.clone(),
       hotkey_record: state.config.hotkey_record.clone(),
+      capture_mode: state.config.capture_mode.clone(),
       ..Default::default()
     };
     (history, config)

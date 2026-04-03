@@ -28,6 +28,7 @@ export interface AppConfig {
   recording_fps: number;
   gif_max_duration: number;
   gif_max_width: number;
+  recording_prefix: string;
 }
 
 export interface CaptureResult {

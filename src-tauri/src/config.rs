@@ -62,6 +62,8 @@ pub struct AppConfig {
   pub gif_max_duration: u32,
   #[serde(default = "default_gif_max_width")]
   pub gif_max_width: u32,
+  #[serde(default = "default_recording_prefix")]
+  pub recording_prefix: String,
 }
 
 fn default_clipboard_action() -> String {
@@ -106,6 +108,10 @@ fn default_recording_fps() -> u32 {
 
 fn default_gif_max_duration() -> u32 {
   15
+}
+
+fn default_recording_prefix() -> String {
+  "recording".to_string()
 }
 
 fn default_gif_max_width() -> u32 {
@@ -172,6 +178,7 @@ impl Default for AppConfig {
       recording_fps: default_recording_fps(),
       gif_max_duration: default_gif_max_duration(),
       gif_max_width: default_gif_max_width(),
+      recording_prefix: default_recording_prefix(),
     }
   }
 }

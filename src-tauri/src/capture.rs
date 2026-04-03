@@ -731,7 +731,7 @@ pub fn copy_file_to_clipboard(path: &std::path::Path) -> Result<(), AppError> {
 
 
 /// Strip path-significant and Windows-reserved characters from filename parts.
-fn sanitize_filename_part(s: &str) -> String {
+pub fn sanitize_filename_part(s: &str) -> String {
   s.replace(['/', '\\', ':', '<', '>', '|', '"', '?', '*', '\0'], "_")
     .replace("..", "_")
 }

@@ -89,6 +89,8 @@ pub fn run() {
       commands::trigger_window_capture,
       commands::get_window_at_cursor,
       commands::complete_window_capture,
+      commands::suspend_hotkeys,
+      commands::resume_hotkeys,
       commands::get_pending_annotation,
       commands::get_pending_annotation_data,
       commands::get_annotation_config,
