@@ -298,7 +298,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
         #[cfg(not(target_os = "macos"))]
         {
           app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-          return Err(e);
+          return Err(_e);
         }
       }
     };
