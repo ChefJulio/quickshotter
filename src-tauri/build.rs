@@ -34,6 +34,9 @@ fn main() {
 
         println!("cargo:rustc-link-lib=framework=UserNotifications");
 
-        // ScreenCaptureKit is linked by the screencapturekit crate automatically.
+        // ScreenCaptureKit uses Swift Concurrency internally.
+        // Add rpath to the Swift runtime libraries so the linker can find them.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
     }
 }
