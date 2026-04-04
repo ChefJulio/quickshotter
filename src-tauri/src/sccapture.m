@@ -190,38 +190,58 @@ int sccapture_capture_region(
         return -1;
     }
 
-    // Convert CGImage to RGBA pixel buffer
+    // Convert CGImage to RGBA pixel buffer.
+    // Use the CGImage's actual bytesPerRow (may include padding) and
+    // read via data provider to get exact pixel layout.
     uint32_t imgW = (uint32_t)CGImageGetWidth(capturedImage);
     uint32_t imgH = (uint32_t)CGImageGetHeight(capturedImage);
-    size_t bytesPerRow = imgW * 4;
-    size_t totalBytes = bytesPerRow * imgH;
+    size_t srcBytesPerRow = CGImageGetBytesPerRow(capturedImage);
+    size_t bpp = CGImageGetBitsPerPixel(capturedImage) / 8;
 
-    uint8_t *rgba = (uint8_t *)malloc(totalBytes);
-    if (!rgba) {
-        CGImageRelease(capturedImage);
-        return -1;
-    }
-
-    // Draw into an RGBA bitmap context
-    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(
-        rgba, imgW, imgH, 8, bytesPerRow,
-        colorSpace,
-        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big // RGBA
-    );
-    CGColorSpaceRelease(colorSpace);
-
-    if (!ctx) {
-        free(rgba);
+    // Get raw pixel data from the CGImage
+    CFDataRef pixelData = CGDataProviderCopyData(CGImageGetDataProvider(capturedImage));
+    if (!pixelData) {
         CGImageRelease(capturedImage);
         if (error_buf && error_buf_len > 0) {
-            snprintf(error_buf, error_buf_len, "Failed to create bitmap context");
+            snprintf(error_buf, error_buf_len, "Failed to get pixel data from CGImage");
         }
         return -1;
     }
 
-    CGContextDrawImage(ctx, CGRectMake(0, 0, imgW, imgH), capturedImage);
-    CGContextRelease(ctx);
+    const uint8_t *src = CFDataGetBytePtr(pixelData);
+    size_t outBytesPerRow = imgW * 4;
+    size_t totalBytes = outBytesPerRow * imgH;
+    uint8_t *rgba = (uint8_t *)malloc(totalBytes);
+    if (!rgba) {
+        CFRelease(pixelData);
+        CGImageRelease(capturedImage);
+        return -1;
+    }
+
+    // Copy row by row, converting BGRA → RGBA and handling row padding.
+    // SCScreenshotManager returns BGRA with possible row padding.
+    CGBitmapInfo bitmapInfo = CGImageGetBitmapInfo(capturedImage);
+    int isBGRA = ((bitmapInfo & kCGBitmapByteOrderMask) == kCGBitmapByteOrder32Little);
+
+    for (uint32_t row = 0; row < imgH; row++) {
+        const uint8_t *srcRow = src + row * srcBytesPerRow;
+        uint8_t *dstRow = rgba + row * outBytesPerRow;
+        for (uint32_t col = 0; col < imgW; col++) {
+            const uint8_t *px = srcRow + col * bpp;
+            if (isBGRA) {
+                // BGRA → RGBA
+                dstRow[col * 4 + 0] = px[2]; // R
+                dstRow[col * 4 + 1] = px[1]; // G
+                dstRow[col * 4 + 2] = px[0]; // B
+                dstRow[col * 4 + 3] = px[3]; // A
+            } else {
+                // Already RGBA (or RGBX)
+                memcpy(dstRow + col * 4, px, 4);
+            }
+        }
+    }
+
+    CFRelease(pixelData);
     CGImageRelease(capturedImage);
 
     *out_rgba = rgba;
