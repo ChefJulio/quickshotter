@@ -128,9 +128,15 @@ pub fn run() {
       // Shows the native permission dialog and registers the app in System Settings.
       // Skip in debug builds — the call gets attributed to the parent process
       // (VS Code/Terminal) instead of our app, causing wrong permission prompts.
+      // macOS: request screen recording permission only on first launch
+      // (when not yet granted). CGRequestScreenCaptureAccess shows a dialog
+      // even when already granted on some macOS versions, so check first.
       #[cfg(all(target_os = "macos", not(debug_assertions)))]
       {
-        capture::request_screen_recording_permission();
+        extern "C" { fn CGPreflightScreenCaptureAccess() -> bool; }
+        if !unsafe { CGPreflightScreenCaptureAccess() } {
+          capture::request_screen_recording_permission();
+        }
       }
 
       // Sync autostart registry/launch-agent to match config on every launch.
