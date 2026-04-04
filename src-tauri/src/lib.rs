@@ -1,4 +1,6 @@
 mod capture;
+#[cfg(target_os = "macos")]
+mod sccapture_mac;
 mod commands;
 mod config;
 mod coords;
@@ -124,11 +126,20 @@ pub fn run() {
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
 
-      // macOS: no proactive permission request on startup.
-      // CGPreflightScreenCaptureAccess is unreliable and CGRequestScreenCaptureAccess
-      // shows dialogs even when permission is already granted. Instead, if the user
-      // captures and gets a blank image, they'll know to check Settings > About >
-      // Screen Recording Permission.
+      // macOS: check screen recording permission via ScreenCaptureKit.
+      // SCShareableContent.getShareableContent() automatically prompts the user
+      // on first call if permission hasn't been granted. This is reliable and
+      // correctly attributed to QuickShotter.app (unlike CGRequestScreenCaptureAccess).
+      // ScreenCaptureKit permission check — prompts user if not granted.
+      // Skip in debug: child processes inherit parent's TCC attribution
+      // (VS Code terminal), causing the wrong app to be prompted.
+      #[cfg(all(target_os = "macos", not(debug_assertions)))]
+      {
+        match sccapture_mac::check_permission() {
+          Ok(()) => eprintln!("[permission] screen recording granted"),
+          Err(e) => eprintln!("[permission] screen recording check: {e}"),
+        }
+      }
 
       // Sync autostart registry/launch-agent to match config on every launch.
       // Covers the case where the entry was removed externally (reinstall,

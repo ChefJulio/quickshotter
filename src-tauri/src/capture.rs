@@ -18,7 +18,7 @@ pub struct ScreenCapture {
 }
 
 /// Get the Retina scale factor for the main screen.
-/// Captures a 1x1 region to compare physical vs logical dimensions.
+/// Uses ScreenCaptureKit display info (no capture needed).
 /// Result is cached after first call.
 #[cfg(target_os = "macos")]
 pub fn get_retina_scale() -> f64 {
@@ -28,11 +28,18 @@ pub fn get_retina_scale() -> f64 {
   if cached > 0.5 { return cached; }
 
   let scale = (|| -> Option<f64> {
-    // Capture a small region to detect physical pixel scale
-    let img = capture_region(0, 0, 10, 10).ok()?;
-    let physical_scale = img.width() as f64 / 10.0;
-    eprintln!("[retina] 10px capture → {}px, scale={physical_scale}", img.width());
-    if physical_scale > 1.01 { Some(physical_scale) } else { Some(1.0) }
+    let displays = crate::sccapture_mac::get_displays().ok()?;
+    let d = displays.first()?;
+    // Compare physical pixels (from CGDisplayPixelsWide) to logical (from SCDisplay.frame)
+    extern "C" {
+      fn CGMainDisplayID() -> u32;
+      fn CGDisplayPixelsWide(display: u32) -> usize;
+    }
+    let physical_w = unsafe { CGDisplayPixelsWide(CGMainDisplayID()) } as f64;
+    let logical_w = d.width as f64;
+    let s = physical_w / logical_w.max(1.0);
+    eprintln!("[retina] physical={physical_w}, logical={logical_w}, scale={s}");
+    if s > 1.01 { Some(s) } else { Some(1.0) }
   })().unwrap_or(2.0);
 
   CACHED.store(scale.to_bits(), Ordering::Relaxed);
@@ -377,110 +384,14 @@ pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppEr
   }
 }
 
-/// Capture a specific screen region via CGWindowListCreateImage.
-/// Captures exactly the requested rectangle from the compositor — no full-display
-/// capture + crop needed.
+/// Capture a specific screen region via ScreenCaptureKit (SCScreenshotManager).
+/// Coordinates are logical points. Returns Retina-resolution RGBA image.
 #[cfg(target_os = "macos")]
 pub fn capture_region(x: i32, y: i32, w: u32, h: u32) -> Result<RgbaImage, AppError> {
   if w == 0 || h == 0 {
     return Err(AppError::Capture("Region too small".to_string()));
   }
-
-  #[repr(C)]
-  #[derive(Copy, Clone)]
-  struct CGRect { origin: CGPoint, size: CGSize }
-  #[repr(C)]
-  #[derive(Copy, Clone)]
-  struct CGPoint { x: f64, y: f64 }
-  #[repr(C)]
-  #[derive(Copy, Clone)]
-  struct CGSize { width: f64, height: f64 }
-
-  // CGWindowListOption flags
-  const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
-  // CGWindowImageOption
-  const K_CG_WINDOW_IMAGE_DEFAULT: u32 = 0;
-  // kCGNullWindowID
-  const K_CG_NULL_WINDOW_ID: u32 = 0;
-
-  type CGImageRef = *const std::ffi::c_void;
-  type CFDataRef = *const std::ffi::c_void;
-
-  #[link(name = "CoreGraphics", kind = "framework")]
-  extern "C" {
-    fn CGWindowListCreateImage(
-      screenBounds: CGRect,
-      listOption: u32,
-      windowID: u32,
-      imageOption: u32,
-    ) -> CGImageRef;
-    fn CGImageGetWidth(image: CGImageRef) -> usize;
-    fn CGImageGetHeight(image: CGImageRef) -> usize;
-    fn CGImageGetBitsPerPixel(image: CGImageRef) -> usize;
-    fn CGImageGetBytesPerRow(image: CGImageRef) -> usize;
-    fn CGImageGetDataProvider(image: CGImageRef) -> *const std::ffi::c_void;
-    fn CGDataProviderCopyData(provider: *const std::ffi::c_void) -> CFDataRef;
-    fn CFDataGetBytePtr(data: CFDataRef) -> *const u8;
-    fn CFDataGetLength(data: CFDataRef) -> isize;
-    fn CFRelease(cf: *const std::ffi::c_void);
-  }
-
-  unsafe {
-    let rect = CGRect {
-      origin: CGPoint { x: x as f64, y: y as f64 },
-      size: CGSize { width: w as f64, height: h as f64 },
-    };
-
-    let cg_image = CGWindowListCreateImage(
-      rect,
-      K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
-      K_CG_NULL_WINDOW_ID,
-      K_CG_WINDOW_IMAGE_DEFAULT,
-    );
-
-    if cg_image.is_null() {
-      return Err(AppError::Capture("CGWindowListCreateImage returned null (permission denied?)".to_string()));
-    }
-
-    let img_w = CGImageGetWidth(cg_image) as u32;
-    let img_h = CGImageGetHeight(cg_image) as u32;
-    let bpp = CGImageGetBitsPerPixel(cg_image);
-    let bytes_per_row = CGImageGetBytesPerRow(cg_image);
-
-    // Get raw pixel data
-    let provider = CGImageGetDataProvider(cg_image);
-    let data = CGDataProviderCopyData(provider);
-    if data.is_null() {
-      CFRelease(cg_image);
-      return Err(AppError::Capture("Failed to get pixel data from CGImage".to_string()));
-    }
-
-    let ptr = CFDataGetBytePtr(data);
-    let len = CFDataGetLength(data) as usize;
-
-    // CoreGraphics returns BGRA (or BGRX with premultiplied alpha).
-    // Convert to RGBA row by row (bytes_per_row may include padding).
-    let mut rgba = Vec::with_capacity((img_w * img_h * 4) as usize);
-    for row in 0..img_h as usize {
-      let row_start = row * bytes_per_row;
-      for col in 0..img_w as usize {
-        let px = row_start + col * (bpp / 8);
-        if px + 3 < len {
-          // BGRA -> RGBA
-          rgba.push(*ptr.add(px + 2)); // R
-          rgba.push(*ptr.add(px + 1)); // G
-          rgba.push(*ptr.add(px));     // B
-          rgba.push(*ptr.add(px + 3)); // A
-        }
-      }
-    }
-
-    CFRelease(data);
-    CFRelease(cg_image);
-
-    RgbaImage::from_raw(img_w, img_h, rgba)
-      .ok_or_else(|| AppError::Capture("Failed to create image from CGImage data".to_string()))
-  }
+  crate::sccapture_mac::capture_region(x as f64, y as f64, w as f64, h as f64)
 }
 
 fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
