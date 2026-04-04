@@ -672,7 +672,7 @@ async fn complete_region_capture_live(
   // No compositor wait needed — the daemon called DwmFlush() before sending
   // the result, guaranteeing the overlay window is fully removed.
 
-  // On macOS, daemon returns physical pixels but CGWindowListCreateImage
+  // On macOS, daemon returns physical pixels but ScreenCaptureKit
   // expects logical points. Divide by Retina scale factor.
   #[cfg(target_os = "macos")]
   let (screen_x, screen_y, w, h) = {
@@ -684,9 +684,9 @@ async fn complete_region_capture_live(
     (sx, sy, sw, sh)
   };
 
-  // Capture just the selected region via BitBlt / CGWindowListCreateImage
+  // Capture just the selected region (ScreenCaptureKit on macOS, BitBlt on Windows)
   let image = capture::capture_region(screen_x, screen_y, w, h)?;
-  eprintln!("[timing] region BitBlt ({}x{}): {:?}", w, h, t0.elapsed());
+  eprintln!("[timing] region capture ({}x{}): {:?}", w, h, t0.elapsed());
 
   let annotate = force_annotate
     || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;

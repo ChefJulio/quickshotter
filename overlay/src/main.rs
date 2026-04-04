@@ -457,9 +457,9 @@ impl OverlayApp {
         use windows::Win32::Graphics::Dwm::DwmFlush;
         unsafe { let _ = DwmFlush(); }
       }
-      #[cfg(not(target_os = "windows"))]
-      std::thread::sleep(std::time::Duration::from_millis(16));
-      eprintln!("[timing][daemon] compositor wait done: {:?}", t_finish.elapsed());
+      // On Windows, wait for DWM to finish compositing the window destruction.
+      // On macOS, no wait needed — ScreenCaptureKit captures independently.
+      eprintln!("[timing][daemon] post-destroy: {:?}", t_finish.elapsed());
       result.send();
       eprintln!("[timing][daemon] result sent to host: {:?}", t_finish.elapsed());
     }
