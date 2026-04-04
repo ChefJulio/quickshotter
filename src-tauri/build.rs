@@ -34,13 +34,6 @@ fn main() {
 
         println!("cargo:rustc-link-lib=framework=UserNotifications");
 
-        // Compile ScreenCaptureKit wrapper (replaces CGWindowListCreateImage)
-        cc::Build::new()
-            .file("src/sccapture.m")
-            .flag("-fobjc-arc")
-            .flag("-Wno-availability")
-            .compile("sccapture");
-
-        println!("cargo:rustc-link-lib=framework=ScreenCaptureKit");
+        // ScreenCaptureKit is linked by the screencapturekit crate automatically.
     }
 }

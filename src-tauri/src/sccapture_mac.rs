@@ -1,15 +1,19 @@
-//! ScreenCaptureKit FFI bindings for macOS.
+//! ScreenCaptureKit capture for macOS via the `screencapturekit` crate.
 //!
-//! Wraps the C API exposed by sccapture.m. Used on macOS to replace
-//! CGWindowListCreateImage with SCScreenshotManager for faster, more
-//! reliable screen capture with proper permission handling.
+//! Replaces CGWindowListCreateImage with SCScreenshotManager for faster,
+//! GPU-accelerated capture with proper permission handling.
 
 use image::RgbaImage;
+use screencapturekit::cg::CGRect;
+use screencapturekit::shareable_content::SCShareableContent;
+use screencapturekit::screenshot_manager::SCScreenshotManager;
+use screencapturekit::stream::configuration::SCStreamConfiguration;
+use screencapturekit::stream::content_filter::SCContentFilter;
+
 use crate::error::AppError;
 
-#[repr(C)]
-#[derive(Debug)]
-pub struct SCDisplayInfo {
+/// Display info extracted from ScreenCaptureKit.
+pub struct DisplayInfo {
     pub display_id: u32,
     pub x: i32,
     pub y: i32,
@@ -17,173 +21,91 @@ pub struct SCDisplayInfo {
     pub height: u32,
 }
 
-extern "C" {
-    fn sccapture_get_displays(
-        out_displays: *mut *mut SCDisplayInfo,
-        out_count: *mut i32,
-        error_buf: *mut u8,
-        error_buf_len: i32,
-    ) -> i32;
-
-    fn sccapture_capture_region(
-        x: f64, y: f64, w: f64, h: f64,
-        out_rgba: *mut *mut u8,
-        out_width: *mut u32,
-        out_height: *mut u32,
-        error_buf: *mut u8,
-        error_buf_len: i32,
-    ) -> i32;
-
-    fn sccapture_capture_display(
-        display_id: u32,
-        out_rgba: *mut *mut u8,
-        out_width: *mut u32,
-        out_height: *mut u32,
-        error_buf: *mut u8,
-        error_buf_len: i32,
-    ) -> i32;
-
-    fn sccapture_check_permission(
-        error_buf: *mut u8,
-        error_buf_len: i32,
-    ) -> i32;
-
-    fn sccapture_free_pixels(pixels: *mut u8);
-}
-
-fn get_error(buf: &[u8]) -> String {
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..len]).to_string()
-}
-
 /// Get available displays. Also triggers permission prompt if needed.
-pub fn get_displays() -> Result<Vec<SCDisplayInfo>, AppError> {
-    let mut displays_ptr: *mut SCDisplayInfo = std::ptr::null_mut();
-    let mut count: i32 = 0;
-    let mut error_buf = [0u8; 512];
+pub fn get_displays() -> Result<Vec<DisplayInfo>, AppError> {
+    let content = SCShareableContent::get()
+        .map_err(|e| AppError::Capture(format!("ScreenCaptureKit: {e}")))?;
 
-    let result = unsafe {
-        sccapture_get_displays(
-            &mut displays_ptr,
-            &mut count,
-            error_buf.as_mut_ptr(),
-            error_buf.len() as i32,
-        )
-    };
-
-    if result != 0 {
-        return Err(AppError::Capture(format!(
-            "ScreenCaptureKit: {}", get_error(&error_buf)
-        )));
-    }
-
-    let displays = if !displays_ptr.is_null() && count > 0 {
-        let slice = unsafe { std::slice::from_raw_parts(displays_ptr, count as usize) };
-        let vec: Vec<SCDisplayInfo> = slice.iter().map(|d| SCDisplayInfo {
-            display_id: d.display_id,
-            x: d.x,
-            y: d.y,
-            width: d.width,
-            height: d.height,
-        }).collect();
-        unsafe { libc_free(displays_ptr as *mut std::ffi::c_void); }
-        vec
-    } else {
-        Vec::new()
-    };
-
-    Ok(displays)
-}
-
-extern "C" {
-    #[link_name = "free"]
-    fn libc_free(ptr: *mut std::ffi::c_void);
+    let displays = content.displays();
+    Ok(displays.iter().map(|d| {
+        let frame = d.frame();
+        DisplayInfo {
+            display_id: d.display_id(),
+            x: frame.x as i32,
+            y: frame.y as i32,
+            width: frame.width as u32,
+            height: frame.height as u32,
+        }
+    }).collect())
 }
 
 /// Capture a screen region. Coordinates are logical points.
+/// Returns a Retina-resolution RGBA image.
 pub fn capture_region(x: f64, y: f64, w: f64, h: f64) -> Result<RgbaImage, AppError> {
-    let mut rgba_ptr: *mut u8 = std::ptr::null_mut();
-    let mut img_w: u32 = 0;
-    let mut img_h: u32 = 0;
-    let mut error_buf = [0u8; 512];
+    let content = SCShareableContent::get()
+        .map_err(|e| AppError::Capture(format!("ScreenCaptureKit: {e}")))?;
 
-    let result = unsafe {
-        sccapture_capture_region(
-            x, y, w, h,
-            &mut rgba_ptr,
-            &mut img_w,
-            &mut img_h,
-            error_buf.as_mut_ptr(),
-            error_buf.len() as i32,
-        )
+    let displays = content.displays();
+    if displays.is_empty() {
+        return Err(AppError::Capture("No displays found".to_string()));
+    }
+
+    // Find the display that contains the region center
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+    let target = displays.iter().find(|d| {
+        let f = d.frame();
+        cx >= f.x && cx < f.x + f.width && cy >= f.y && cy < f.y + f.height
+    }).unwrap_or(&displays[0]);
+
+    let display_frame = target.frame();
+
+    // Build content filter for target display
+    let filter = SCContentFilter::create()
+        .with_display(target)
+        .with_excluding_windows(&[])
+        .build();
+
+    // Get Retina scale: physical pixels / logical points
+    let scale = {
+        extern "C" { fn CGDisplayPixelsWide(display: u32) -> usize; }
+        let physical_w = unsafe { CGDisplayPixelsWide(target.display_id()) } as f64;
+        physical_w / display_frame.width.max(1.0)
     };
 
-    if result != 0 {
-        return Err(AppError::Capture(format!(
-            "ScreenCaptureKit capture failed: {}", get_error(&error_buf)
-        )));
-    }
+    // Source rect in display-local logical coordinates
+    let source_rect = CGRect::new(
+        x - display_frame.x,
+        y - display_frame.y,
+        w, h,
+    );
 
-    if rgba_ptr.is_null() || img_w == 0 || img_h == 0 {
-        return Err(AppError::Capture("ScreenCaptureKit returned empty image".to_string()));
-    }
+    // Output dimensions in physical pixels
+    let pixel_w = (w * scale) as u32;
+    let pixel_h = (h * scale) as u32;
 
-    let len = (img_w as usize) * (img_h as usize) * 4;
-    let pixels = unsafe { std::slice::from_raw_parts(rgba_ptr, len) }.to_vec();
-    unsafe { sccapture_free_pixels(rgba_ptr); }
+    let config = SCStreamConfiguration::new()
+        .with_width(pixel_w)
+        .with_height(pixel_h)
+        .with_source_rect(source_rect)
+        .with_shows_cursor(false);
 
-    RgbaImage::from_raw(img_w, img_h, pixels)
+    let image = SCScreenshotManager::capture_image(&filter, &config)
+        .map_err(|e| AppError::Capture(format!("Screenshot failed: {e}")))?;
+
+    let rgba = image.rgba_data()
+        .map_err(|e| AppError::Capture(format!("Pixel extraction failed: {e}")))?;
+
+    let img_w = image.width() as u32;
+    let img_h = image.height() as u32;
+
+    RgbaImage::from_raw(img_w, img_h, rgba)
         .ok_or_else(|| AppError::Capture("Failed to create image from SCK data".to_string()))
 }
 
-/// Capture a full display by ID.
-pub fn capture_display(display_id: u32) -> Result<RgbaImage, AppError> {
-    let mut rgba_ptr: *mut u8 = std::ptr::null_mut();
-    let mut img_w: u32 = 0;
-    let mut img_h: u32 = 0;
-    let mut error_buf = [0u8; 512];
-
-    let result = unsafe {
-        sccapture_capture_display(
-            display_id,
-            &mut rgba_ptr,
-            &mut img_w,
-            &mut img_h,
-            error_buf.as_mut_ptr(),
-            error_buf.len() as i32,
-        )
-    };
-
-    if result != 0 {
-        return Err(AppError::Capture(format!(
-            "ScreenCaptureKit display capture failed: {}", get_error(&error_buf)
-        )));
-    }
-
-    if rgba_ptr.is_null() || img_w == 0 || img_h == 0 {
-        return Err(AppError::Capture("ScreenCaptureKit returned empty display image".to_string()));
-    }
-
-    let len = (img_w as usize) * (img_h as usize) * 4;
-    let pixels = unsafe { std::slice::from_raw_parts(rgba_ptr, len) }.to_vec();
-    unsafe { sccapture_free_pixels(rgba_ptr); }
-
-    RgbaImage::from_raw(img_w, img_h, pixels)
-        .ok_or_else(|| AppError::Capture("Failed to create image from SCK display data".to_string()))
-}
-
 /// Check if screen recording permission is granted.
-/// Returns Ok(()) if granted, Err with message if denied.
 pub fn check_permission() -> Result<(), AppError> {
-    let mut error_buf = [0u8; 512];
-    let result = unsafe {
-        sccapture_check_permission(error_buf.as_mut_ptr(), error_buf.len() as i32)
-    };
-    if result != 0 {
-        Err(AppError::Capture(format!(
-            "Screen recording permission denied: {}", get_error(&error_buf)
-        )))
-    } else {
-        Ok(())
-    }
+    SCShareableContent::get()
+        .map_err(|e| AppError::Capture(format!("Screen recording permission denied: {e}")))?;
+    Ok(())
 }
