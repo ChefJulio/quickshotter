@@ -688,8 +688,6 @@ async fn complete_region_capture_live(
   let image = capture::capture_region(screen_x, screen_y, w, h)?;
   eprintln!("[timing] region BitBlt ({}x{}): {:?}", w, h, t0.elapsed());
 
-  // Detect blank capture (permission revoked or not granted)
-  #[cfg(target_os = "macos")]
   let annotate = force_annotate
     || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
