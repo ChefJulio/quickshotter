@@ -33,6 +33,7 @@ fn main() {
             .compile("notification_mac");
 
         println!("cargo:rustc-link-lib=framework=UserNotifications");
+        println!("cargo:rustc-link-lib=framework=AppKit");
 
         // ScreenCaptureKit uses Swift Concurrency internally.
         // Add rpath to the Swift runtime libraries so the linker can find them.

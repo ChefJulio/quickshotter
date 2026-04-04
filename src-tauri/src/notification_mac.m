@@ -1,4 +1,5 @@
 #import <UserNotifications/UserNotifications.h>
+#import <AppKit/AppKit.h>
 
 // Delegate that forces notification banners to display even when
 // QuickShotter is the frontmost app (macOS suppresses them by default).
@@ -14,6 +15,13 @@
 @end
 
 static QSNotificationDelegate *_delegate = nil;
+
+// Returns NSScreen.mainScreen.backingScaleFactor (2.0 on Retina, 1.0 on standard).
+double qs_get_backing_scale_factor(void) {
+    NSScreen *screen = [NSScreen mainScreen];
+    if (!screen) return 2.0; // safe default for Retina Macs
+    return (double)[screen backingScaleFactor];
+}
 
 void qs_install_notification_delegate(void) {
     @try {

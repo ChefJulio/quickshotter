@@ -12,6 +12,16 @@ use screencapturekit::stream::content_filter::SCContentFilter;
 
 use crate::error::AppError;
 
+extern "C" {
+    fn qs_get_backing_scale_factor() -> f64;
+}
+
+fn get_backing_scale_factor() -> f64 {
+    let scale = unsafe { qs_get_backing_scale_factor() };
+    eprintln!("[retina] NSScreen.backingScaleFactor = {scale}");
+    scale
+}
+
 /// Display info extracted from ScreenCaptureKit.
 pub struct DisplayInfo {
     pub display_id: u32,
@@ -66,12 +76,9 @@ pub fn capture_region(x: f64, y: f64, w: f64, h: f64) -> Result<RgbaImage, AppEr
         .with_excluding_windows(&[])
         .build();
 
-    // Get Retina scale: physical pixels / logical points
-    let scale = {
-        extern "C" { fn CGDisplayPixelsWide(display: u32) -> usize; }
-        let physical_w = unsafe { CGDisplayPixelsWide(target.display_id()) } as f64;
-        physical_w / display_frame.width.max(1.0)
-    };
+    // Get Retina scale via NSScreen.backingScaleFactor.
+    // CGDisplayPixelsWide returns logical on some macOS versions, so use NSScreen.
+    let scale = get_backing_scale_factor();
 
     // Source rect in display-local logical coordinates
     let source_rect = CGRect::new(

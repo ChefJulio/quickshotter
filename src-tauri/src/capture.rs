@@ -18,7 +18,7 @@ pub struct ScreenCapture {
 }
 
 /// Get the Retina scale factor for the main screen.
-/// Uses ScreenCaptureKit display info (no capture needed).
+/// Uses NSScreen.backingScaleFactor via ObjC FFI.
 /// Result is cached after first call.
 #[cfg(target_os = "macos")]
 pub fn get_retina_scale() -> f64 {
@@ -27,20 +27,9 @@ pub fn get_retina_scale() -> f64 {
   let cached = f64::from_bits(CACHED.load(Ordering::Relaxed));
   if cached > 0.5 { return cached; }
 
-  let scale = (|| -> Option<f64> {
-    let displays = crate::sccapture_mac::get_displays().ok()?;
-    let d = displays.first()?;
-    // Compare physical pixels (from CGDisplayPixelsWide) to logical (from SCDisplay.frame)
-    extern "C" {
-      fn CGMainDisplayID() -> u32;
-      fn CGDisplayPixelsWide(display: u32) -> usize;
-    }
-    let physical_w = unsafe { CGDisplayPixelsWide(CGMainDisplayID()) } as f64;
-    let logical_w = d.width as f64;
-    let s = physical_w / logical_w.max(1.0);
-    eprintln!("[retina] physical={physical_w}, logical={logical_w}, scale={s}");
-    if s > 1.01 { Some(s) } else { Some(1.0) }
-  })().unwrap_or(2.0);
+  extern "C" { fn qs_get_backing_scale_factor() -> f64; }
+  let scale = unsafe { qs_get_backing_scale_factor() };
+  eprintln!("[retina] backingScaleFactor = {scale}");
 
   CACHED.store(scale.to_bits(), Ordering::Relaxed);
   scale
