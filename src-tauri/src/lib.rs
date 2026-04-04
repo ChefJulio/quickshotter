@@ -121,6 +121,16 @@ pub fn run() {
         unsafe { qs_install_notification_delegate(); }
       }
 
+      // macOS: set activation policy to Accessory so the app doesn't
+      // appear in Cmd+Tab or the Dock. It's a tray-only app.
+      #[cfg(target_os = "macos")]
+      {
+        extern "C" {
+          fn qs_set_activation_policy_accessory();
+        }
+        unsafe { qs_set_activation_policy_accessory(); }
+      }
+
       let config = config::load_config(&app.handle());
       let launch_on_startup = config.launch_on_startup;
       let explorer_ctx_menu = config.explorer_context_menu;

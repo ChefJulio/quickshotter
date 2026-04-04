@@ -23,6 +23,11 @@ double qs_get_backing_scale_factor(void) {
     return (double)[screen backingScaleFactor];
 }
 
+// Hide app from Cmd+Tab and Dock — tray-only app.
+void qs_set_activation_policy_accessory(void) {
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+}
+
 void qs_install_notification_delegate(void) {
     @try {
         _delegate = [[QSNotificationDelegate alloc] init];
