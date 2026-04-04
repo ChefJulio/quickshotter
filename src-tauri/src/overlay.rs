@@ -279,28 +279,11 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     eprintln!("[timing] pre-capture start: {:?}", t0.elapsed());
     let screen = match capture::capture_all_monitors() {
       Ok(s) => s,
-      Err(_e) => {
-        // On macOS, capture failure likely means permission was revoked
-        #[cfg(target_os = "macos")]
-        {
-          capture::notify_blank_capture(app);
-          app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-          return Ok(());
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-          app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-          return Err(_e);
-        }
+      Err(e) => {
+        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
+        return Err(e);
       }
     };
-
-    #[cfg(target_os = "macos")]
-    if capture::is_likely_blank(&screen.image) {
-      capture::notify_blank_capture(app);
-      app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-      return Ok(());
-    }
 
     eprintln!("[timing] screen captured ({}x{}): {:?}", screen.image.width(), screen.image.height(), t0.elapsed());
 

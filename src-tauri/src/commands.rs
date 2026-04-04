@@ -515,13 +515,6 @@ async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto
   eprintln!("[timing] fullscreen BitBlt ({}x{}, mode={}): {:?}", screen.width, screen.height, fullscreen_mode, t0.elapsed());
 
   // Fallback: detect blank screenshot in case permission check passed but
-  // capture still returned empty (can happen after app updates on some macOS versions).
-  #[cfg(target_os = "macos")]
-  if capture::is_likely_blank(&screen.image) {
-    capture::notify_blank_capture(app);
-    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
-  }
-
   let annotate = app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 
   if annotate {
@@ -608,13 +601,6 @@ async fn complete_region_capture_inner(
   };
 
   eprintln!("[timing] image ready ({}x{}): {:?}", image.width(), image.height(), t0.elapsed());
-
-  // Detect blank capture (permission revoked or not granted)
-  #[cfg(target_os = "macos")]
-  if capture::is_likely_blank(&image) {
-    capture::notify_blank_capture(app);
-    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
-  }
 
   // Check if we should open annotation editor (config setting or shift-key override)
   let annotate = force_annotate
@@ -704,11 +690,6 @@ async fn complete_region_capture_live(
 
   // Detect blank capture (permission revoked or not granted)
   #[cfg(target_os = "macos")]
-  if capture::is_likely_blank(&image) {
-    capture::notify_blank_capture(app);
-    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
-  }
-
   let annotate = force_annotate
     || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
 

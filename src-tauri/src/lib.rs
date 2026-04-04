@@ -124,20 +124,11 @@ pub fn run() {
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
 
-      // macOS: request screen recording permission on first launch.
-      // Shows the native permission dialog and registers the app in System Settings.
-      // Skip in debug builds — the call gets attributed to the parent process
-      // (VS Code/Terminal) instead of our app, causing wrong permission prompts.
-      // macOS: request screen recording permission only on first launch
-      // (when not yet granted). CGRequestScreenCaptureAccess shows a dialog
-      // even when already granted on some macOS versions, so check first.
-      #[cfg(all(target_os = "macos", not(debug_assertions)))]
-      {
-        extern "C" { fn CGPreflightScreenCaptureAccess() -> bool; }
-        if !unsafe { CGPreflightScreenCaptureAccess() } {
-          capture::request_screen_recording_permission();
-        }
-      }
+      // macOS: no proactive permission request on startup.
+      // CGPreflightScreenCaptureAccess is unreliable and CGRequestScreenCaptureAccess
+      // shows dialogs even when permission is already granted. Instead, if the user
+      // captures and gets a blank image, they'll know to check Settings > About >
+      // Screen Recording Permission.
 
       // Sync autostart registry/launch-agent to match config on every launch.
       // Covers the case where the entry was removed externally (reinstall,

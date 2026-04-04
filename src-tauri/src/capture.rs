@@ -497,66 +497,12 @@ fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
 
 
 /// Check if the app has screen recording permission on macOS.
-/// Request screen recording permission on macOS.
-/// Registers the app in System Settings and shows the native permission
-/// dialog on first call. Subsequent calls are no-ops.
-#[cfg(target_os = "macos")]
-pub fn request_screen_recording_permission() -> bool {
-  extern "C" {
-    fn CGRequestScreenCaptureAccess() -> bool;
-  }
-  unsafe { CGRequestScreenCaptureAccess() }
-}
-
 /// Open macOS System Settings to the Screen Recording permission pane.
 #[cfg(target_os = "macos")]
 pub fn open_screen_recording_settings() {
   let _ = std::process::Command::new("open")
     .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     .spawn();
-}
-
-/// Called when a blank capture is detected (permission likely revoked).
-/// Shows a notification and opens Screen Recording settings.
-#[cfg(target_os = "macos")]
-pub fn notify_blank_capture(app: &tauri::AppHandle) {
-  eprintln!("[permission] blank capture detected — opening Screen Recording settings");
-  use tauri_plugin_notification::NotificationExt;
-  app.notification()
-    .builder()
-    .title("Screen Recording permission needed")
-    .body("Enable QuickShotter in Screen Recording settings, then try again")
-    .show()
-    .ok();
-  open_screen_recording_settings();
-}
-
-/// Check if a captured image is blank (all black/transparent).
-/// This detects denied screen recording permission — macOS returns
-/// all-black pixels when the app doesn't have permission.
-/// Samples every ~97th pixel across the entire image for speed.
-#[cfg(target_os = "macos")]
-pub fn is_likely_blank(img: &RgbaImage) -> bool {
-  if img.width() == 0 || img.height() == 0 {
-    return true;
-  }
-
-  // Sample pixels across the image. A denied capture returns all-black
-  // (RGB=0). Check if ANY sampled pixel has non-zero RGB.
-  // Threshold: allow up to 1 brightness to handle compression artifacts.
-  let has_content = img
-    .as_raw()
-    .chunks_exact(4)
-    .step_by(97)
-    .any(|px| px[0] > 1 || px[1] > 1 || px[2] > 1);
-
-  // Log some sample pixel values for debugging
-  let sample: Vec<_> = img.as_raw().chunks_exact(4).step_by(1000).take(5)
-    .map(|px| format!("({},{},{},{})", px[0], px[1], px[2], px[3]))
-    .collect();
-  eprintln!("[blank-check] {}x{} has_content={} samples={}", img.width(), img.height(), has_content, sample.join(" "));
-
-  !has_content
 }
 
 /// Copy plain text to the system clipboard.
