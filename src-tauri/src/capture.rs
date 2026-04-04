@@ -550,11 +550,13 @@ pub fn is_likely_blank(img: &RgbaImage) -> bool {
     .step_by(97)
     .any(|px| px[0] > 1 || px[1] > 1 || px[2] > 1);
 
-  let blank = !has_content;
-  if blank {
-    eprintln!("[permission] blank capture detected ({}x{}, all pixels ≤1)", img.width(), img.height());
-  }
-  blank
+  // Log some sample pixel values for debugging
+  let sample: Vec<_> = img.as_raw().chunks_exact(4).step_by(1000).take(5)
+    .map(|px| format!("({},{},{},{})", px[0], px[1], px[2], px[3]))
+    .collect();
+  eprintln!("[blank-check] {}x{} has_content={} samples={}", img.width(), img.height(), has_content, sample.join(" "));
+
+  !has_content
 }
 
 /// Copy plain text to the system clipboard.
