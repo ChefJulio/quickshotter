@@ -172,6 +172,15 @@ pub fn run() {
       // presses their first hotkey.
       overlay::spawn_daemon();
 
+      // Pre-warm ScreenCaptureKit cache (display list + content filters).
+      // This also triggers the permission prompt on first launch.
+      #[cfg(target_os = "macos")]
+      std::thread::spawn(|| {
+        if let Err(e) = sccapture_mac::check_permission() {
+          eprintln!("[sck] pre-warm failed: {e}");
+        }
+      });
+
       // Pre-create settings window hidden so it opens instantly on first click.
       commands::precreate_settings_window(&app.handle());
 
