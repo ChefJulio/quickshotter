@@ -238,14 +238,6 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
 
   eprintln!("[timing] state lock + mode set: {:?}", t0.elapsed());
 
-  // macOS: check screen recording permission before proceeding.
-  #[cfg(target_os = "macos")]
-  if !capture::ensure_screen_recording_permission(app) {
-    app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-    return Ok(());
-  }
-  eprintln!("[timing] permission check: {:?}", t0.elapsed());
-
   // Get virtual desktop bounds — use cached if available (avoids Monitor::all() OS call)
   let bounds = {
     let s = app.state::<Mutex<AppState>>();

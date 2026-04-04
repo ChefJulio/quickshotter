@@ -77,9 +77,6 @@ pub fn run() {
       commands::cancel_capture,
       commands::get_overlay_mode,
       commands::get_overlay_origin,
-      commands::request_permission,
-      commands::check_permission,
-      commands::complete_onboarding,
       commands::open_permission_settings,
       commands::show_settings,
       commands::get_config,
@@ -127,39 +124,13 @@ pub fn run() {
       let explorer_ctx_menu = config.explorer_context_menu;
       app.manage(Mutex::new(state::AppState::new(config)));
 
-      // macOS: show welcome/onboarding if not yet completed, or if permission revoked.
-      // Skip entirely in debug builds — CGPreflightScreenCaptureAccess is unreliable
-      // for unsigned binaries and blocks dev iteration.
+      // macOS: request screen recording permission on first launch.
+      // Shows the native permission dialog and registers the app in System Settings.
+      // Skip in debug builds — the call gets attributed to the parent process
+      // (VS Code/Terminal) instead of our app, causing wrong permission prompts.
       #[cfg(all(target_os = "macos", not(debug_assertions)))]
       {
-        let has_permission = capture::has_screen_recording_permission();
-        let onboarded = app.path().app_config_dir().ok()
-          .map(|d| d.join(".onboarded").exists())
-          .unwrap_or(false);
-
-        // If permission was revoked, reset onboarding so it shows fresh
-        if !has_permission && onboarded {
-          if let Ok(dir) = app.path().app_config_dir() {
-            let _ = std::fs::remove_file(dir.join(".onboarded"));
-          }
-        }
-
-        if !has_permission || !onboarded {
-          use tauri::{WebviewUrl, WebviewWindowBuilder};
-          WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
-            .title("Welcome to QuickShotter")
-            .inner_size(440.0, 560.0)
-            .resizable(false)
-            .center()
-            .build()
-            .ok();
-        }
-
-        // Mid-session permission revocation is detected reactively when a
-        // capture returns blank — see notify_blank_capture() in capture.rs.
-        // Background polling doesn't work because CGPreflightScreenCaptureAccess
-        // caches per-process and CGWindowListCopyWindowInfo no longer strips
-        // window names on macOS Tahoe.
+        capture::request_screen_recording_permission();
       }
 
       // Sync autostart registry/launch-agent to match config on every launch.

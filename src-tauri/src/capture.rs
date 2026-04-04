@@ -497,26 +497,9 @@ fn rgba_to_rgb(img: &RgbaImage) -> Result<image::RgbImage, AppError> {
 
 
 /// Check if the app has screen recording permission on macOS.
-/// Uses CGPreflightScreenCaptureAccess — reliable for the signed production
-/// .app on launch. Caches per-process so can't detect mid-session revocation,
-/// but that's handled by blank capture detection instead.
-#[cfg(target_os = "macos")]
-pub fn has_screen_recording_permission() -> bool {
-  extern "C" {
-    fn CGPreflightScreenCaptureAccess() -> bool;
-  }
-  let result = unsafe { CGPreflightScreenCaptureAccess() };
-  // Debug builds: CGPreflight is unreliable for unsigned binaries.
-  // Skip the check and let blank-capture detection handle revoked permission.
-  if !result && cfg!(debug_assertions) {
-    eprintln!("[permission] CGPreflightScreenCaptureAccess=false (unsigned dev build, bypassing)");
-    return true;
-  }
-  result
-}
-
 /// Request screen recording permission on macOS.
-/// Triggers the system permission dialog on first call.
+/// Registers the app in System Settings and shows the native permission
+/// dialog on first call. Subsequent calls are no-ops.
 #[cfg(target_os = "macos")]
 pub fn request_screen_recording_permission() -> bool {
   extern "C" {
@@ -533,80 +516,45 @@ pub fn open_screen_recording_settings() {
     .spawn();
 }
 
-/// Unified permission check for capture paths on macOS.
-/// Returns true if capture should proceed, false if permission is missing.
-/// Handles the user-facing notification and opens Settings when needed.
+/// Called when a blank capture is detected (permission likely revoked).
+/// Shows a notification and opens Screen Recording settings.
 #[cfg(target_os = "macos")]
-pub fn ensure_screen_recording_permission(app: &tauri::AppHandle) -> bool {
-  if has_screen_recording_permission() {
-    return true;
-  }
-
-  // Permission not granted — show notification and open Settings directly.
-  // We skip CGRequestScreenCaptureAccess to avoid the system dialog popup.
+pub fn notify_blank_capture(app: &tauri::AppHandle) {
+  eprintln!("[permission] blank capture detected — opening Screen Recording settings");
   use tauri_plugin_notification::NotificationExt;
   app.notification()
     .builder()
-    .title("QuickShotter needs Screen Recording access")
+    .title("Screen Recording permission needed")
     .body("Enable QuickShotter in Screen Recording settings, then try again")
     .show()
     .ok();
   open_screen_recording_settings();
-  false
 }
 
-/// Called when a blank capture is detected (permission likely revoked).
-/// Resets onboarding and shows the welcome window so the user gets
-/// guided back through granting permission.
-#[cfg(target_os = "macos")]
-pub fn notify_blank_capture(app: &tauri::AppHandle) {
-  use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-
-  eprintln!("[permission] blank capture detected — resetting onboarding");
-
-  // Reset onboarding flag
-  if let Ok(dir) = app.path().app_config_dir() {
-    let _ = std::fs::remove_file(dir.join(".onboarded"));
-  }
-
-  // Destroy existing welcome window if any
-  if let Some(existing) = app.get_webview_window("welcome") {
-    existing.destroy().ok();
-  }
-
-  // Show welcome window
-  let _ = WebviewWindowBuilder::new(app, "welcome", WebviewUrl::App("welcome.html".into()))
-    .title("Welcome to QuickShotter")
-    .inner_size(440.0, 560.0)
-    .resizable(false)
-    .center()
-    .build();
-}
-
-/// Check if screen recording permission is denied by examining the menu bar
-/// area of a captured image. The menu bar (top ~25px) always has non-black
-/// content (clock, icons, app name) when permission is granted. If it's
-/// all black, permission was denied — even if the user has a black wallpaper.
+/// Check if a captured image is blank (all black/transparent).
+/// This detects denied screen recording permission — macOS returns
+/// all-black pixels when the app doesn't have permission.
+/// Samples every ~97th pixel across the entire image for speed.
 #[cfg(target_os = "macos")]
 pub fn is_likely_blank(img: &RgbaImage) -> bool {
   if img.width() == 0 || img.height() == 0 {
     return true;
   }
 
-  // Check the menu bar strip (top 25 rows of pixels).
-  // The menu bar always has visible content when permission is granted.
-  let menu_bar_height = 25.min(img.height());
-  let menu_bar_pixels = (img.width() * menu_bar_height) as usize;
-
-  // Sample every ~97th pixel in the menu bar area
+  // Sample pixels across the image. A denied capture returns all-black
+  // (RGB=0). Check if ANY sampled pixel has non-zero RGB.
+  // Threshold: allow up to 1 brightness to handle compression artifacts.
   let has_content = img
     .as_raw()
     .chunks_exact(4)
-    .take(menu_bar_pixels)
     .step_by(97)
-    .any(|px| px[0] > 0 || px[1] > 0 || px[2] > 0);
+    .any(|px| px[0] > 1 || px[1] > 1 || px[2] > 1);
 
-  !has_content
+  let blank = !has_content;
+  if blank {
+    eprintln!("[permission] blank capture detected ({}x{}, all pixels ≤1)", img.width(), img.height());
+  }
+  blank
 }
 
 /// Copy plain text to the system clipboard.

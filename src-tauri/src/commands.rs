@@ -61,52 +61,12 @@ pub fn get_overlay_origin() -> Result<(i32, i32), AppError> {
   Ok((bounds.x, bounds.y))
 }
 
-/// Request screen recording permission on macOS.
-/// CGRequestScreenCaptureAccess adds the app to the list and shows a system
-/// dialog on first call. On subsequent calls it returns silently, so we also
-/// open Settings directly as a fallback — the user always has somewhere to go.
-#[tauri::command]
-pub fn request_permission() {
-  #[cfg(target_os = "macos")]
-  {
-    // This adds QuickShotter to the list + shows dialog (first time only)
-    capture::request_screen_recording_permission();
-    // Always open Settings as fallback (dialog may not appear on repeat calls)
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    capture::open_screen_recording_settings();
-  }
-}
-
-/// Open Screen Recording settings directly (no system dialog).
+/// Open Screen Recording settings directly.
 /// Used from the Settings > About section.
 #[tauri::command]
 pub fn open_permission_settings() {
   #[cfg(target_os = "macos")]
   capture::open_screen_recording_settings();
-}
-
-/// Check if screen recording permission is currently granted.
-#[tauri::command]
-pub fn check_permission() -> bool {
-  #[cfg(target_os = "macos")]
-  { capture::has_screen_recording_permission() }
-  #[cfg(not(target_os = "macos"))]
-  { true }
-}
-
-/// Mark onboarding as complete and close the welcome window.
-#[tauri::command]
-pub fn complete_onboarding(app: AppHandle) {
-  let config_dir = app.path().app_config_dir().ok();
-  if let Some(dir) = config_dir {
-    let flag = dir.join(".onboarded");
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(flag, "1");
-  }
-  // Close the welcome window from Rust side
-  if let Some(win) = app.get_webview_window("welcome") {
-    win.destroy().ok();
-  }
 }
 
 // -- Shared capture finalization --
@@ -546,11 +506,6 @@ pub async fn do_fullscreen_capture(app: &AppHandle) -> Result<CaptureResultDto, 
 }
 
 async fn do_fullscreen_capture_inner(app: &AppHandle) -> Result<CaptureResultDto, AppError> {
-  #[cfg(target_os = "macos")]
-  if !capture::ensure_screen_recording_permission(app) {
-    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
-  }
-
   let t0 = std::time::Instant::now();
   let fullscreen_mode = app.state::<Mutex<AppState>>().lock_or_recover().config.fullscreen_mode.clone();
   let screen = match fullscreen_mode.as_str() {
@@ -654,6 +609,13 @@ async fn complete_region_capture_inner(
 
   eprintln!("[timing] image ready ({}x{}): {:?}", image.width(), image.height(), t0.elapsed());
 
+  // Detect blank capture (permission revoked or not granted)
+  #[cfg(target_os = "macos")]
+  if capture::is_likely_blank(&image) {
+    capture::notify_blank_capture(app);
+    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
+  }
+
   // Check if we should open annotation editor (config setting or shift-key override)
   let annotate = force_annotate
     || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
@@ -739,6 +701,13 @@ async fn complete_region_capture_live(
   // Capture just the selected region via BitBlt / CGWindowListCreateImage
   let image = capture::capture_region(screen_x, screen_y, w, h)?;
   eprintln!("[timing] region BitBlt ({}x{}): {:?}", w, h, t0.elapsed());
+
+  // Detect blank capture (permission revoked or not granted)
+  #[cfg(target_os = "macos")]
+  if capture::is_likely_blank(&image) {
+    capture::notify_blank_capture(app);
+    return Ok(CaptureResultDto { filepath: None, copied_to_clipboard: false });
+  }
 
   let annotate = force_annotate
     || app.state::<Mutex<AppState>>().lock_or_recover().config.annotate_captures;
