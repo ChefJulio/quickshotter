@@ -106,7 +106,6 @@ pub fn run() {
       commands::complete_select_screen_capture,
       commands::complete_ocr_capture,
       commands::ocr_image,
-      commands::upload_last_to_imgur,
     ])
     .setup(|app| {
       // macOS: install notification delegate so banners show even when

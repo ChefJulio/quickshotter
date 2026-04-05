@@ -12,6 +12,8 @@ pub const MAX_HISTORY: usize = 5;
 pub struct AppState {
   pub config: AppConfig,
   pub capture_history: VecDeque<PathBuf>,
+  /// In-memory image history for upload without saving to disk.
+  pub image_history: VecDeque<(String, RgbaImage)>,
   pub is_capturing: bool,
   pub is_annotating: bool,
   // Only used in "freeze" / "window" capture modes
@@ -45,6 +47,7 @@ impl AppState {
     Self {
       config,
       capture_history: VecDeque::new(),
+      image_history: VecDeque::new(),
       is_capturing: false,
       is_annotating: false,
       pending_screenshot: None,
@@ -68,6 +71,13 @@ impl AppState {
     self.capture_history.push_back(path);
     while self.capture_history.len() > MAX_HISTORY {
       self.capture_history.pop_front();
+    }
+  }
+
+  pub fn add_to_image_history(&mut self, name: String, image: RgbaImage) {
+    self.image_history.push_back((name, image));
+    while self.image_history.len() > MAX_HISTORY {
+      self.image_history.pop_front();
     }
   }
 }

@@ -23,7 +23,7 @@ fn format_hotkey_display(raw: &str) -> String {
 
 pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
   let config = app.state::<Mutex<AppState>>().lock_or_recover().config.clone();
-  let menu = build_tray_menu(app, &[], &config)?;
+  let menu = build_tray_menu(app, &[], &[], &config)?;
 
   let mut tray = TrayIconBuilder::with_id("main");
   if let Some(icon) = app.default_window_icon() {
@@ -71,21 +71,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         "ocr_region" => {
           crate::commands::delayed_ocr_capture(&app);
         }
-        "upload_imgur" => {
-          let app = app.clone();
-          tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::commands::upload_last_to_imgur(app.clone()).await {
-              eprintln!("Upload failed: {e}");
-              use tauri_plugin_notification::NotificationExt;
-              app.notification()
-                .builder()
-                .title("Upload failed")
-                .body(&e.to_string())
-                .show()
-                .ok();
-            }
-          });
-        }
+        // upload_N items are handled in the catch-all below
         "annotate_file" => {
           let app = app.clone();
           tauri::async_runtime::spawn(async move {
@@ -127,6 +113,24 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
               }
             }
           }
+          // Upload items: "upload_0", "upload_1", etc.
+          else if let Some(suffix) = id.strip_prefix("upload_") {
+            if let Ok(idx) = suffix.parse::<usize>() {
+              let app = app.clone();
+              tauri::async_runtime::spawn(async move {
+                if let Err(e) = crate::commands::upload_image_by_index(app.clone(), idx).await {
+                  eprintln!("Upload failed: {e}");
+                  use tauri_plugin_notification::NotificationExt;
+                  app.notification()
+                    .builder()
+                    .title("Upload failed")
+                    .body(&e.to_string())
+                    .show()
+                    .ok();
+                }
+              });
+            }
+          }
         }
       }
     })
@@ -138,6 +142,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 pub fn build_tray_menu(
   app: &AppHandle,
   history: &[PathBuf],
+  image_names: &[String],
   config: &crate::config::AppConfig,
 ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
   let mut builder = MenuBuilder::new(app);
@@ -197,7 +202,24 @@ pub fn build_tray_menu(
   }
 
   builder = builder.item(&PredefinedMenuItem::separator(app)?);
-  builder = builder.item(&MenuItemBuilder::with_id("upload_imgur", "Upload to catbox.moe").build(app)?);
+
+  // Upload submenu: pick from recent captures (in-memory, works without save-to-disk)
+  if !image_names.is_empty() {
+    let mut upload_sub = SubmenuBuilder::with_id(app, "upload_menu", "Upload to catbox.moe");
+    for (i, name) in image_names.iter().rev().enumerate() {
+      let idx = image_names.len() - 1 - i;
+      upload_sub = upload_sub.item(
+        &MenuItemBuilder::with_id(format!("upload_{idx}"), name).build(app)?,
+      );
+    }
+    builder = builder.item(&upload_sub.build()?);
+  } else {
+    builder = builder.item(
+      &MenuItemBuilder::with_id("upload_none", "Upload to catbox.moe")
+        .enabled(false).build(app)?,
+    );
+  }
+
   builder = builder.item(&MenuItemBuilder::with_id("annotate_file", "Annotate File...").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("settings", "Settings").build(app)?);
   builder = builder.item(&MenuItemBuilder::with_id("exit", "Exit").build(app)?);
@@ -206,11 +228,11 @@ pub fn build_tray_menu(
 }
 
 pub fn refresh_tray_menu(app: &AppHandle) {
-  let (history, config) = {
+  let (history, image_names, config) = {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
-    // Clone only what build_tray_menu needs (5 hotkey strings + history paths)
     let history: Vec<PathBuf> = state.capture_history.iter().cloned().collect();
+    let image_names: Vec<String> = state.image_history.iter().map(|(name, _)| name.clone()).collect();
     let config = crate::config::AppConfig {
       hotkey_region: state.config.hotkey_region.clone(),
       hotkey_window: state.config.hotkey_window.clone(),
@@ -220,9 +242,9 @@ pub fn refresh_tray_menu(app: &AppHandle) {
       capture_mode: state.config.capture_mode.clone(),
       ..Default::default()
     };
-    (history, config)
+    (history, image_names, config)
   };
-  if let Ok(menu) = build_tray_menu(app, &history, &config) {
+  if let Ok(menu) = build_tray_menu(app, &history, &image_names, &config) {
     if let Some(tray) = app.tray_by_id("main") {
       if let Err(e) = tray.set_menu(Some(menu)) {
         eprintln!("Failed to update tray menu: {e}");

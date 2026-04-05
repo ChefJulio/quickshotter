@@ -108,11 +108,22 @@ fn finalize_capture_with_toggle(app: &AppHandle, img: &RgbaImage, toggle_save: b
   };
   let filepath_str = filepath.as_ref().map(|p: &PathBuf| p.to_string_lossy().to_string());
 
-  if let Some(ref path) = filepath {
+  {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    state.add_to_history(path.clone());
-    state.last_saved_path = Some(path.clone());
+    // Always store in-memory for upload (even when not saving to disk)
+    let name = filepath.as_ref()
+      .and_then(|p| p.file_name())
+      .map(|n| n.to_string_lossy().to_string())
+      .unwrap_or_else(|| {
+        let now = chrono::Local::now();
+        format!("capture_{}.png", now.format("%H-%M-%S"))
+      });
+    state.add_to_image_history(name, img.clone());
+    if let Some(ref path) = filepath {
+      state.add_to_history(path.clone());
+      state.last_saved_path = Some(path.clone());
+    }
   }
 
   // Fire off background work: disk save, upload, tray refresh, notification
@@ -1498,21 +1509,17 @@ fn notify_capture(app: &AppHandle, filepath: Option<&str>) {
   }
 }
 
-// -- Imgur upload --
+// -- Catbox upload --
 
-/// Upload the most recent capture (from history) to catbox.moe.
-#[tauri::command]
-pub async fn upload_last_to_imgur(app: AppHandle) -> Result<String, AppError> {
-  let path = {
+/// Upload a capture from in-memory image history by index.
+pub async fn upload_image_by_index(app: AppHandle, index: usize) -> Result<String, AppError> {
+  let img = {
     let s = app.state::<Mutex<AppState>>();
     let state = s.lock_or_recover();
-    state.capture_history.back().cloned()
-      .ok_or_else(|| AppError::Upload("No recent capture to upload".to_string()))?
+    state.image_history.get(index)
+      .map(|(_, img)| img.clone())
+      .ok_or_else(|| AppError::Upload("Capture not found in history".to_string()))?
   };
-
-  let img = image::open(&path)
-    .map_err(|e| AppError::Upload(format!("Failed to read image: {e}")))?
-    .to_rgba8();
 
   let url = crate::catbox::upload(&img).await?;
   capture::copy_text_to_clipboard(&url)?;
