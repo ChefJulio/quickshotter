@@ -382,13 +382,25 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
   match result {
     DaemonResult::Ready => { /* shouldn't happen here */ }
     DaemonResult::Region { x1, y1, x2, y2, shift, alt } => {
-      // Check if the overlay was opened in OCR mode — route accordingly.
       let overlay_mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
+      let delay = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay;
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
         eprintln!("[timing] async capture task started: {:?} after dispatch", t_dispatch.elapsed());
+
+        // Close overlay before delay so user can interact with desktop
+        close_overlay(&app);
+
+        // Capture delay: show countdown + selection border, then wait
+        if delay > 0 && overlay_mode != "ocr" {
+          eprintln!("[delay] starting {}s delay", delay);
+          if let Err(e) = crate::commands::run_capture_delay(&app, delay, x1, y1, x2, y2).await {
+            eprintln!("[delay] cancelled or failed: {e}");
+            return;
+          }
+        }
+
         let result = if overlay_mode == "ocr" {
-          // Convert screen coords to image coords (same as region capture)
           let (bx, by) = {
             let s = app.state::<Mutex<AppState>>();
             let state = s.lock_or_recover();
@@ -417,7 +429,6 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
         if let Err(e) = result {
           eprintln!("Region capture failed: {e}");
         }
-        close_overlay(&app);
       });
     }
     DaemonResult::Window { left, top, right, bottom, shift, alt } => {

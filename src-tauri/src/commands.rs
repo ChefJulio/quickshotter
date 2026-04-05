@@ -33,7 +33,9 @@ pub struct AnnotationConfigDto {
 /// Returns "live", "freeze", or "window" so the overlay JS knows which mode.
 #[tauri::command]
 pub fn get_capture_delay(app: AppHandle) -> u32 {
-  app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay
+  let delay = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay;
+  eprintln!("[delay] get_capture_delay called, returning {delay}");
+  delay
 }
 
 /// Temporarily unregister all global hotkeys (while recording a new hotkey).
@@ -261,6 +263,7 @@ pub async fn prepare_delayed_capture(
     .map_err(|e| AppError::Capture(format!("Failed to open countdown: {e}")))?;
 
   // Selection border
+  eprintln!("[delay] sel_x={:?} sel_y={:?} sel_w={:?} sel_h={:?}", sel_x, sel_y, sel_w, sel_h);
   if let (Some(sx), Some(sy), Some(sw), Some(sh)) = (sel_x, sel_y, sel_w, sel_h) {
     if sw > 0.0 && sh > 0.0 {
       let pad = 3.0;
@@ -279,7 +282,8 @@ pub async fn prepare_delayed_capture(
         (bx, by, bw, bh)
       };
 
-      WebviewWindowBuilder::new(&app, "delay-border", WebviewUrl::App("delay-border.html".into()))
+      eprintln!("[delay] border pos=({bx},{by}) size=({bw}x{bh})");
+      match WebviewWindowBuilder::new(&app, "delay-border", WebviewUrl::App("delay-border.html".into()))
         .title("Selection")
         .transparent(true)
         .decorations(false)
@@ -290,11 +294,139 @@ pub async fn prepare_delayed_capture(
         .position(bx, by)
         .skip_taskbar(true)
         .build()
-        .ok();
+      {
+        Ok(_) => eprintln!("[delay] border window created"),
+        Err(e) => eprintln!("[delay] border window FAILED: {e}"),
+      }
     }
   }
 
   Ok(())
+}
+
+/// Run a capture delay from Rust (for live mode where the daemon handles mouse input).
+/// Shows countdown + selection border, waits for the delay, then cleans up.
+/// Returns Ok(()) when delay completes, Err if cancelled.
+pub async fn run_capture_delay(
+  app: &AppHandle,
+  delay_secs: u32,
+  x1: i32, y1: i32, x2: i32, y2: i32,
+) -> Result<(), AppError> {
+  use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+  // Daemon returns physical pixel coords. Tauri .position()/.inner_size()
+  // expect logical coords. Divide by scale factor.
+  let scale = {
+    if let Ok(Some(mon)) = app.primary_monitor() {
+      mon.scale_factor()
+    } else {
+      #[cfg(target_os = "macos")]
+      { crate::capture::get_retina_scale() }
+      #[cfg(not(target_os = "macos"))]
+      { 1.0 }
+    }
+  };
+
+  let lx1 = x1.min(x2) as f64 / scale;
+  let ly1 = y1.min(y2) as f64 / scale;
+  let lw = (x1.max(x2) - x1.min(x2)) as f64 / scale;
+  let lh = (y1.max(y2) - y1.min(y2)) as f64 / scale;
+
+  // Countdown bubble: position above the selection
+  // inner_size is in logical pixels (matches CSS pixels), so don't scale the size.
+  // Only positions need conversion from physical to logical.
+  let countdown_size = 80.0;
+  let pad = 8.0;
+  let cx = lx1;
+  let mut cy = ly1 - countdown_size - pad;
+  if cy < 0.0 {
+    let below = ly1 + lh + pad;
+    cy = if below + countdown_size <= 10000.0 { below } else { pad };
+  }
+
+  eprintln!("[delay] countdown pos=({cx},{cy}) size={countdown_size} scale={scale}");
+  WebviewWindowBuilder::new(app, "countdown", WebviewUrl::App("countdown.html".into()))
+    .title("Countdown")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .resizable(false)
+    .inner_size(countdown_size, countdown_size)
+    .position(cx, cy)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| AppError::Capture(format!("Failed to open countdown: {e}")))?;
+
+  // Selection border (padding is in logical pixels for the CSS border width)
+  let bpad = 3.0;
+  let (bx, by, bw, bh) = (lx1 - bpad, ly1 - bpad, lw + bpad * 2.0, lh + bpad * 2.0);
+  eprintln!("[delay] border pos=({bx},{by}) size=({bw}x{bh})");
+  match WebviewWindowBuilder::new(app, "delay-border", WebviewUrl::App("delay-border.html".into()))
+    .title("Selection")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .resizable(false)
+    .inner_size(bw, bh)
+    .position(bx, by)
+    .skip_taskbar(true)
+    .build()
+  {
+    Ok(_) => eprintln!("[delay] border window created"),
+    Err(e) => eprintln!("[delay] border window FAILED: {e}"),
+  }
+
+  // Register temporary ESC shortcut to cancel
+  {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+    let esc: Shortcut = "Escape".parse().unwrap();
+    let app2 = app.clone();
+    app.global_shortcut().on_shortcut(esc, move |_app, _shortcut, _event| {
+      cancel_delayed_capture(app2.clone());
+    }).ok();
+  }
+
+  // Wait for the countdown (the countdown.html JS drives its own timer
+  // and calls execute_delayed_capture when done, but we also need to wait here)
+  let _ = tauri::async_runtime::spawn_blocking(move || {
+    std::thread::sleep(std::time::Duration::from_secs(delay_secs as u64));
+  }).await;
+
+  // Check if cancelled during wait
+  let cancelled = app.get_webview_window("countdown").is_none();
+
+  // Clean up countdown + border
+  if let Some(w) = app.get_webview_window("countdown") {
+    w.hide().ok();
+    w.destroy().ok();
+  }
+  if let Some(w) = app.get_webview_window("delay-border") {
+    w.hide().ok();
+    w.destroy().ok();
+  }
+
+  // Wait for windows to de-render
+  let _ = tauri::async_runtime::spawn_blocking(|| {
+    std::thread::sleep(std::time::Duration::from_millis(50));
+  }).await;
+
+  // Unregister ESC, re-register hotkeys
+  {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if let Ok(esc) = "Escape".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+      app.global_shortcut().unregister(esc).ok();
+    }
+    crate::hotkeys::register_hotkeys(app).ok();
+  }
+
+  if cancelled {
+    Err(AppError::Capture("Delay cancelled".to_string()))
+  } else {
+    eprintln!("[delay] delay complete, capturing");
+    Ok(())
+  }
 }
 
 /// Cancel a delayed capture (e.g. user pressed ESC during countdown).
