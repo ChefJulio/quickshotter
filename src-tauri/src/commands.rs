@@ -1721,39 +1721,32 @@ pub async fn start_region_recording(
 
   #[cfg(target_os = "macos")]
   let (region, capture_source) = {
-    // On macOS, use SCK displays. Overlay coords are physical pixels from
-    // desktop origin. Find the SCK display containing the selection center
-    // and convert to display-local coords for SCStream.
+    // On macOS, overlay sends coords in logical points (xcapScale=1) and
+    // bounds from get_desktop_bounds() is also logical (xcap returns logical
+    // on macOS). SCK display coords are logical too. No scale conversion needed.
     let displays = crate::sccapture_mac::get_displays()?;
     if displays.is_empty() {
       return Err(AppError::Recording("No displays found".to_string()));
     }
 
+    // All coords are logical points on macOS
     let abs_x = x as i32 + bounds.x;
     let abs_y = y as i32 + bounds.y;
     let abs_r = abs_x + width as i32;
     let abs_b = abs_y + height as i32;
 
-    // Find display containing the selection (SCK display coords are logical points)
-    let scale = displays[0].scale;
+    // Find display containing the selection (all in logical points)
     let target = displays.iter().find(|d| {
-      let dx = d.x;
-      let dy = d.y;
-      let dr = dx + d.width as i32;
-      let db = dy + d.height as i32;
-      // Compare in logical space: convert overlay physical coords to logical
-      let lx = (abs_x as f64 / scale) as i32;
-      let ly = (abs_y as f64 / scale) as i32;
-      let lr = (abs_r as f64 / scale) as i32;
-      let lb = (abs_b as f64 / scale) as i32;
-      lx >= dx && ly >= dy && lr <= dr && lb <= db
+      abs_x >= d.x && abs_y >= d.y
+        && abs_r <= d.x + d.width as i32
+        && abs_b <= d.y + d.height as i32
     }).unwrap_or(&displays[0]);
 
-    // Region coords are physical pixels; pipeline converts to logical for SCStream
-    let adj_x = x.saturating_sub((target.x as f64 * scale) as u32 - bounds.x as u32);
-    let adj_y = y.saturating_sub((target.y as f64 * scale) as u32 - bounds.y as u32);
-    eprintln!("recording: SCStream display={} overlay=({},{} {}x{}) adjusted=({},{})",
-      target.display_id, x, y, width, height, adj_x, adj_y);
+    // Make region display-local (subtract display origin in logical points)
+    let adj_x = (abs_x - target.x).max(0) as u32;
+    let adj_y = (abs_y - target.y).max(0) as u32;
+    eprintln!("recording: SCStream display={} overlay=({},{} {}x{}) adjusted=({},{}) scale={:.1}",
+      target.display_id, x, y, width, height, adj_x, adj_y, target.scale);
 
     (
       crate::recording::RecordingRegion { x: adj_x, y: adj_y, width, height },

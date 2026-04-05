@@ -222,16 +222,19 @@ fn capture_loop_scstream(
     format: RecordingFormat,
     max_duration_secs: u32,
 ) {
-    // Compute output dimensions and source rect in logical points
+    // Compute output dimensions and source rect in logical points.
+    // On macOS the overlay sends region coords in logical points (xcapScale=1),
+    // so they map directly to SCStream's source_rect. Output dimensions are
+    // scaled up to physical pixels for Retina resolution.
     let (source_rect, out_w, out_h) = if let Some(ref r) = region {
-        // Region coords are in physical pixels from the overlay daemon.
-        // SCStream source_rect needs display-local logical points.
-        let logical_x = r.x as f64 / scale;
-        let logical_y = r.y as f64 / scale;
-        let logical_w = r.width as f64 / scale;
-        let logical_h = r.height as f64 / scale;
+        let logical_x = r.x as f64;
+        let logical_y = r.y as f64;
+        let logical_w = r.width as f64;
+        let logical_h = r.height as f64;
         // Output in physical pixels (Retina resolution)
-        (Some((logical_x, logical_y, logical_w, logical_h)), r.width, r.height)
+        let pw = (logical_w * scale) as u32;
+        let ph = (logical_h * scale) as u32;
+        (Some((logical_x, logical_y, logical_w, logical_h)), pw, ph)
     } else {
         // Fullscreen: get display size from SCK cache
         match crate::sccapture_mac::get_displays() {
