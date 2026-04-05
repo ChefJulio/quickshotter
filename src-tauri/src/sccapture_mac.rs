@@ -6,12 +6,18 @@
 use std::sync::Mutex;
 use image::RgbaImage;
 use screencapturekit::cg::CGRect;
-use screencapturekit::shareable_content::{SCShareableContent, display::SCDisplay};
+use screencapturekit::cm::CMSampleBuffer;
+use screencapturekit::cv::CVPixelBuffer;
+use screencapturekit::shareable_content::SCShareableContent;
 use screencapturekit::screenshot_manager::SCScreenshotManager;
+use screencapturekit::stream::SCStream;
 use screencapturekit::stream::configuration::SCStreamConfiguration;
 use screencapturekit::stream::content_filter::SCContentFilter;
+use screencapturekit::stream::output_type::SCStreamOutputType;
+use screencapturekit::stream::output_trait::SCStreamOutputTrait;
 
 use crate::error::AppError;
+use crate::recording::pipeline::TimestampedFrame;
 
 extern "C" {
     fn qs_get_backing_scale_factor() -> f64;
@@ -73,6 +79,7 @@ pub struct DisplayInfo {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub scale: f64,
 }
 
 /// Get available displays. Also triggers permission prompt if needed.
@@ -86,6 +93,7 @@ pub fn get_displays() -> Result<Vec<DisplayInfo>, AppError> {
         y: d.frame.y as i32,
         width: d.frame.width as u32,
         height: d.frame.height as u32,
+        scale: d.scale,
     }).collect())
 }
 
@@ -155,4 +163,157 @@ pub fn capture_region(x: f64, y: f64, w: f64, h: f64) -> Result<RgbaImage, AppEr
 pub fn check_permission() -> Result<(), AppError> {
     ensure_cache()?;
     Ok(())
+}
+
+// ── SCStream for recording ──────────────────────────────────────
+
+/// Handle to a running SCStream capture.
+pub struct StreamHandle {
+    stream: SCStream,
+    pub receiver: crossbeam_channel::Receiver<TimestampedFrame>,
+}
+
+// SCStream is Send+Sync per the crate; StreamHandle is used from the capture thread.
+unsafe impl Send for StreamHandle {}
+
+/// Output handler that converts CMSampleBuffer frames to TimestampedFrame
+/// and sends them through a crossbeam channel.
+struct FrameHandler {
+    sender: crossbeam_channel::Sender<TimestampedFrame>,
+    start_time: std::time::Instant,
+}
+
+impl SCStreamOutputTrait for FrameHandler {
+    fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
+        if of_type != SCStreamOutputType::Screen {
+            return;
+        }
+
+        // Only process frames with actual content
+        if let Some(status) = sample.frame_status() {
+            if !status.has_content() {
+                return;
+            }
+        }
+
+        // Extract pixel buffer from the sample
+        let pixel_buffer: CVPixelBuffer = match sample.image_buffer() {
+            Some(pb) => pb,
+            None => return,
+        };
+
+        let w = pixel_buffer.width() as u32;
+        let h = pixel_buffer.height() as u32;
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        // Lock pixel buffer for reading
+        let guard = match pixel_buffer.lock_read_only() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let bytes_per_row = pixel_buffer.bytes_per_row();
+        let expected_stride = w as usize * 4;
+
+        // Copy BGRA data, converting to RGBA in-place.
+        // Handle row padding (bytes_per_row may be > width*4).
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        let src = guard.as_slice();
+        for row in 0..h as usize {
+            let row_start = row * bytes_per_row;
+            let row_end = row_start + expected_stride;
+            if row_end > src.len() {
+                break;
+            }
+            let row_data = &src[row_start..row_end];
+            // BGRA → RGBA: swap B and R channels
+            for pixel in row_data.chunks_exact(4) {
+                rgba.push(pixel[2]); // R (was B)
+                rgba.push(pixel[1]); // G
+                rgba.push(pixel[0]); // B (was R)
+                rgba.push(pixel[3]); // A
+            }
+        }
+        drop(guard);
+
+        let image = match RgbaImage::from_raw(w, h, rgba) {
+            Some(img) => img,
+            None => return,
+        };
+
+        let pts_ms = self.start_time.elapsed().as_secs_f64() * 1000.0;
+
+        // Non-blocking send — drop frame if encoder can't keep up
+        let _ = self.sender.try_send(TimestampedFrame { image, pts_ms });
+    }
+}
+
+/// Start an SCStream for recording a display (optionally cropped to a region).
+///
+/// - `display_id`: CGDirectDisplayID of the target display
+/// - `region`: optional crop rect in display-local logical points (x, y, w, h)
+/// - `fps`: target frame rate
+/// - `output_width` / `output_height`: output resolution in physical pixels
+pub fn start_stream(
+    display_id: u32,
+    region: Option<(f64, f64, f64, f64)>,
+    fps: u32,
+    output_width: u32,
+    output_height: u32,
+) -> Result<StreamHandle, AppError> {
+    ensure_cache()?;
+
+    let guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let displays = guard.as_ref().unwrap();
+
+    let target = displays.iter().find(|d| d.display_id == display_id)
+        .ok_or_else(|| AppError::Recording(format!(
+            "Display {} not found in SCK cache", display_id
+        )))?;
+
+    // Configure stream
+    let mut config = SCStreamConfiguration::new()
+        .with_width(output_width)
+        .with_height(output_height)
+        .with_pixel_format(screencapturekit::stream::configuration::pixel_format::PixelFormat::BGRA)
+        .with_shows_cursor(false)
+        .with_fps(fps);
+
+    if let Some((x, y, w, h)) = region {
+        config = config.with_source_rect(CGRect::new(x, y, w, h));
+    }
+
+    // Create stream while we still hold the cache lock (need the filter ref)
+    let mut stream = SCStream::new(&target.filter, &config);
+
+    // Drop the cache lock before starting capture
+    drop(guard);
+
+    // Channel for frame delivery (4-frame buffer matches existing pipeline)
+    let (sender, receiver) = crossbeam_channel::bounded(4);
+
+    let handler = FrameHandler {
+        sender,
+        start_time: std::time::Instant::now(),
+    };
+
+    stream.add_output_handler(handler, SCStreamOutputType::Screen);
+
+    stream.start_capture()
+        .map_err(|e| AppError::Recording(format!("SCStream start failed: {e}")))?;
+
+    eprintln!("[sck] stream started: display={} {}x{} @ {}fps region={:?}",
+        display_id, output_width, output_height, fps, region);
+
+    Ok(StreamHandle { stream, receiver })
+}
+
+/// Stop a running SCStream.
+pub fn stop_stream(handle: StreamHandle) {
+    if let Err(e) = handle.stream.stop_capture() {
+        eprintln!("[sck] stream stop error: {e}");
+    }
+    eprintln!("[sck] stream stopped");
 }

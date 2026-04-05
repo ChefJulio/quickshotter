@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, bounded};
 use image::RgbaImage;
+
+#[cfg(not(target_os = "macos"))]
 use xcap::Monitor;
 
 use crate::error::AppError;
@@ -13,10 +15,12 @@ use crate::error::AppError;
 /// Wrapper to make `xcap::Monitor` Send-safe.
 /// `HMONITOR` (Windows) is a process-global handle, not a thread-local resource,
 /// so it's safe to use across threads despite containing a raw pointer.
+#[cfg(not(target_os = "macos"))]
 struct SendMonitor(Monitor);
+#[cfg(not(target_os = "macos"))]
 unsafe impl Send for SendMonitor {}
 
-/// Region to record (xcap coordinate space).
+/// Region to record (xcap coordinate space on Windows, logical points on macOS).
 #[derive(Debug, Clone)]
 pub struct RecordingRegion {
     pub x: u32,
@@ -40,16 +44,21 @@ pub struct TimestampedFrame {
 
 /// How to capture frames for recording.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum CaptureSource {
-    /// Capture from a single monitor (by index into Monitor::all()).
-    /// Region coords are monitor-local.
+    /// Capture from a single monitor (by index into Monitor::all() on Windows).
     SingleMonitor(usize),
     /// Capture from all monitors (stitched). Region coords are
     /// overlay-relative (= desktop-origin-relative physical pixels).
     FullDesktop,
+    /// macOS SCStream: capture via ScreenCaptureKit hardware-accelerated stream.
+    /// Contains (display_id, scale_factor).
+    #[cfg(target_os = "macos")]
+    SCStream { display_id: u32, scale: f64 },
 }
 
 /// Monitor info gathered before spawning capture thread.
+#[cfg(not(target_os = "macos"))]
 struct MonitorInfo {
     monitor: SendMonitor,
     x: i32,
@@ -59,6 +68,7 @@ struct MonitorInfo {
 }
 
 /// Pre-computed overlap between a monitor and the recording region.
+#[cfg(not(target_os = "macos"))]
 struct OverlapRect {
     monitor_idx: usize,
     src_x: u32, src_y: u32, src_w: u32, src_h: u32,
@@ -122,6 +132,19 @@ pub fn start_pipeline(config: PipelineConfig) -> Result<PipelineHandle, AppError
     let max_duration = config.gif_max_duration_secs;
 
     let capture_thread = match config.capture_source {
+        #[cfg(target_os = "macos")]
+        CaptureSource::SCStream { display_id, scale } => {
+            std::thread::Builder::new()
+                .name("recording-capture".into())
+                .spawn(move || {
+                    capture_loop_scstream(
+                        display_id, scale, capture_fps, capture_region,
+                        capture_stop, sender, format, max_duration,
+                    );
+                })
+                .map_err(|e| AppError::Recording(format!("Failed to spawn capture thread: {e}")))?
+        }
+        #[cfg(not(target_os = "macos"))]
         CaptureSource::SingleMonitor(idx) => {
             let monitors = Monitor::all().map_err(|e| AppError::Recording(format!("Failed to enumerate monitors: {e}")))?;
             let monitor = monitors.into_iter().nth(idx)
@@ -135,6 +158,7 @@ pub fn start_pipeline(config: PipelineConfig) -> Result<PipelineHandle, AppError
                 })
                 .map_err(|e| AppError::Recording(format!("Failed to spawn capture thread: {e}")))?
         }
+        #[cfg(not(target_os = "macos"))]
         CaptureSource::FullDesktop => {
             let monitors = Monitor::all().map_err(|e| AppError::Recording(format!("Failed to enumerate monitors: {e}")))?;
             let mut infos = Vec::new();
@@ -155,6 +179,14 @@ pub fn start_pipeline(config: PipelineConfig) -> Result<PipelineHandle, AppError
                     capture_loop_multi(infos, capture_fps, capture_region, capture_stop, sender, format, max_duration);
                 })
                 .map_err(|e| AppError::Recording(format!("Failed to spawn capture thread: {e}")))?
+        }
+        // On macOS, SingleMonitor and FullDesktop are unused (SCStream handles both)
+        // but the enum variants still exist for cross-platform API compatibility.
+        #[cfg(target_os = "macos")]
+        _ => {
+            return Err(AppError::Recording(
+                "Use CaptureSource::SCStream on macOS".to_string()
+            ));
         }
     };
 
@@ -177,6 +209,104 @@ pub fn start_pipeline(config: PipelineConfig) -> Result<PipelineHandle, AppError
     })
 }
 
+/// macOS SCStream capture loop. Receives frames from ScreenCaptureKit's
+/// hardware-accelerated stream and forwards them to the encoder channel.
+#[cfg(target_os = "macos")]
+fn capture_loop_scstream(
+    display_id: u32,
+    scale: f64,
+    fps: u32,
+    region: Option<RecordingRegion>,
+    stop_signal: Arc<AtomicBool>,
+    sender: Sender<TimestampedFrame>,
+    format: RecordingFormat,
+    max_duration_secs: u32,
+) {
+    // Compute output dimensions and source rect in logical points
+    let (source_rect, out_w, out_h) = if let Some(ref r) = region {
+        // Region coords are in physical pixels from the overlay daemon.
+        // SCStream source_rect needs display-local logical points.
+        let logical_x = r.x as f64 / scale;
+        let logical_y = r.y as f64 / scale;
+        let logical_w = r.width as f64 / scale;
+        let logical_h = r.height as f64 / scale;
+        // Output in physical pixels (Retina resolution)
+        (Some((logical_x, logical_y, logical_w, logical_h)), r.width, r.height)
+    } else {
+        // Fullscreen: get display size from SCK cache
+        match crate::sccapture_mac::get_displays() {
+            Ok(displays) => {
+                if let Some(d) = displays.iter().find(|d| d.display_id == display_id) {
+                    let pw = (d.width as f64 * scale) as u32;
+                    let ph = (d.height as f64 * scale) as u32;
+                    (None, pw, ph)
+                } else {
+                    eprintln!("recording: SCStream display {} not found", display_id);
+                    drop(sender);
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("recording: SCStream get_displays failed: {e}");
+                drop(sender);
+                return;
+            }
+        }
+    };
+
+    eprintln!("recording: capture_loop_scstream starting (display={} {}x{} @ {}fps scale={:.1} region={:?})",
+        display_id, out_w, out_h, fps, scale, source_rect);
+
+    let stream_handle = match crate::sccapture_mac::start_stream(
+        display_id, source_rect, fps, out_w, out_h,
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("recording: SCStream start failed: {e}");
+            drop(sender);
+            return;
+        }
+    };
+
+    let start_time = Instant::now();
+    let mut sent_count: u32 = 0;
+    let mut dropped_count: u32 = 0;
+
+    loop {
+        if stop_signal.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Auto-stop GIF recordings after max duration
+        if format == RecordingFormat::Gif && max_duration_secs > 0 {
+            if start_time.elapsed().as_secs() >= max_duration_secs as u64 {
+                stop_signal.store(true, Ordering::Relaxed);
+                break;
+            }
+        }
+
+        // Receive frames from SCStream (100ms timeout to check stop signal)
+        match stream_handle.receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(frame) => {
+                match sender.try_send(frame) {
+                    Ok(()) => sent_count += 1,
+                    Err(_) => dropped_count += 1,
+                }
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                eprintln!("recording: SCStream channel disconnected");
+                break;
+            }
+        }
+    }
+
+    crate::sccapture_mac::stop_stream(stream_handle);
+    eprintln!("recording: capture_loop_scstream stopped (sent={} dropped={})", sent_count, dropped_count);
+    drop(sender);
+}
+
+#[cfg(not(target_os = "macos"))]
 fn capture_loop(
     monitor: SendMonitor,
     fps: u32,
@@ -286,6 +416,7 @@ fn capture_loop(
 
 /// Multi-monitor capture loop. Captures all monitors that overlap with the
 /// region and composites them into a region-sized output canvas each frame.
+#[cfg(not(target_os = "macos"))]
 fn capture_loop_multi(
     monitors: Vec<MonitorInfo>,
     fps: u32,

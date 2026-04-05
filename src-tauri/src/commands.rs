@@ -1662,7 +1662,16 @@ pub async fn toggle_recording(app: AppHandle) -> Result<RecordingResultDto, AppE
     state.config.clone()
   };
 
-  let pipeline_config = build_pipeline_config(&config, None, crate::recording::CaptureSource::SingleMonitor(0))?;
+  #[cfg(target_os = "macos")]
+  let capture_source = {
+    let displays = crate::sccapture_mac::get_displays()?;
+    let d = displays.first().ok_or_else(|| AppError::Recording("No displays found".to_string()))?;
+    crate::recording::CaptureSource::SCStream { display_id: d.display_id, scale: d.scale }
+  };
+  #[cfg(not(target_os = "macos"))]
+  let capture_source = crate::recording::CaptureSource::SingleMonitor(0);
+
+  let pipeline_config = build_pipeline_config(&config, None, capture_source)?;
   let handle = crate::recording::pipeline::start_pipeline(pipeline_config)?;
 
   {
@@ -1708,55 +1717,95 @@ pub async fn start_region_recording(
 
   // The overlay spans the full virtual desktop, so (x, y) are physical pixel
   // offsets from the overlay's top-left corner (= desktop bounds origin).
-  // Convert to absolute desktop coords, find which monitor the selection fits
-  // in, or use multi-monitor capture if it crosses boundaries.
   let bounds = capture::get_desktop_bounds()?;
-  let monitors = xcap::Monitor::all().map_err(|e| AppError::Recording(format!("Failed to enumerate monitors: {e}")))?;
-  if monitors.is_empty() {
-    return Err(AppError::Recording("No monitors found".to_string()));
-  }
 
-  // Absolute desktop position of selection
-  let abs_x = x as i32 + bounds.x;
-  let abs_y = y as i32 + bounds.y;
-  let abs_r = abs_x + width as i32;
-  let abs_b = abs_y + height as i32;
-
-  // Check if the selection fits entirely within any single monitor
-  let mut single_monitor: Option<usize> = None;
-  for (i, m) in monitors.iter().enumerate() {
-    let mx = m.x().unwrap_or(0);
-    let my = m.y().unwrap_or(0);
-    let mw = m.width().unwrap_or(0) as i32;
-    let mh = m.height().unwrap_or(0) as i32;
-    if abs_x >= mx && abs_y >= my && abs_r <= mx + mw && abs_b <= my + mh {
-      single_monitor = Some(i);
-      break;
+  #[cfg(target_os = "macos")]
+  let (region, capture_source) = {
+    // On macOS, use SCK displays. Overlay coords are physical pixels from
+    // desktop origin. Find the SCK display containing the selection center
+    // and convert to display-local coords for SCStream.
+    let displays = crate::sccapture_mac::get_displays()?;
+    if displays.is_empty() {
+      return Err(AppError::Recording("No displays found".to_string()));
     }
-  }
 
-  let (region, capture_source) = if let Some(idx) = single_monitor {
-    // Selection fits in one monitor -- use fast single-monitor capture
-    let mon = &monitors[idx];
-    let mon_x = mon.x().unwrap_or(0);
-    let mon_y = mon.y().unwrap_or(0);
-    let adj_x = (abs_x - mon_x).max(0) as u32;
-    let adj_y = (abs_y - mon_y).max(0) as u32;
-    eprintln!("recording: single-monitor[{}] overlay=({},{} {}x{}) adjusted=({},{})",
-      idx, x, y, width, height, adj_x, adj_y);
+    let abs_x = x as i32 + bounds.x;
+    let abs_y = y as i32 + bounds.y;
+    let abs_r = abs_x + width as i32;
+    let abs_b = abs_y + height as i32;
+
+    // Find display containing the selection (SCK display coords are logical points)
+    let scale = displays[0].scale;
+    let target = displays.iter().find(|d| {
+      let dx = d.x;
+      let dy = d.y;
+      let dr = dx + d.width as i32;
+      let db = dy + d.height as i32;
+      // Compare in logical space: convert overlay physical coords to logical
+      let lx = (abs_x as f64 / scale) as i32;
+      let ly = (abs_y as f64 / scale) as i32;
+      let lr = (abs_r as f64 / scale) as i32;
+      let lb = (abs_b as f64 / scale) as i32;
+      lx >= dx && ly >= dy && lr <= dr && lb <= db
+    }).unwrap_or(&displays[0]);
+
+    // Region coords are physical pixels; pipeline converts to logical for SCStream
+    let adj_x = x.saturating_sub((target.x as f64 * scale) as u32 - bounds.x as u32);
+    let adj_y = y.saturating_sub((target.y as f64 * scale) as u32 - bounds.y as u32);
+    eprintln!("recording: SCStream display={} overlay=({},{} {}x{}) adjusted=({},{})",
+      target.display_id, x, y, width, height, adj_x, adj_y);
+
     (
       crate::recording::RecordingRegion { x: adj_x, y: adj_y, width, height },
-      crate::recording::CaptureSource::SingleMonitor(idx),
+      crate::recording::CaptureSource::SCStream { display_id: target.display_id, scale: target.scale },
     )
-  } else {
-    // Selection crosses monitors -- use multi-monitor capture.
-    // Region coords stay overlay-relative (= desktop-origin-relative).
-    eprintln!("recording: cross-monitor overlay=({},{} {}x{}) abs=({},{} -> {},{})",
-      x, y, width, height, abs_x, abs_y, abs_r, abs_b);
-    (
-      crate::recording::RecordingRegion { x, y, width, height },
-      crate::recording::CaptureSource::FullDesktop,
-    )
+  };
+
+  #[cfg(not(target_os = "macos"))]
+  let (region, capture_source) = {
+    // Windows: use xcap monitors to find the containing display
+    let monitors = xcap::Monitor::all().map_err(|e| AppError::Recording(format!("Failed to enumerate monitors: {e}")))?;
+    if monitors.is_empty() {
+      return Err(AppError::Recording("No monitors found".to_string()));
+    }
+
+    let abs_x = x as i32 + bounds.x;
+    let abs_y = y as i32 + bounds.y;
+    let abs_r = abs_x + width as i32;
+    let abs_b = abs_y + height as i32;
+
+    let mut single_monitor: Option<usize> = None;
+    for (i, m) in monitors.iter().enumerate() {
+      let mx = m.x().unwrap_or(0);
+      let my = m.y().unwrap_or(0);
+      let mw = m.width().unwrap_or(0) as i32;
+      let mh = m.height().unwrap_or(0) as i32;
+      if abs_x >= mx && abs_y >= my && abs_r <= mx + mw && abs_b <= my + mh {
+        single_monitor = Some(i);
+        break;
+      }
+    }
+
+    if let Some(idx) = single_monitor {
+      let mon = &monitors[idx];
+      let mon_x = mon.x().unwrap_or(0);
+      let mon_y = mon.y().unwrap_or(0);
+      let adj_x = (abs_x - mon_x).max(0) as u32;
+      let adj_y = (abs_y - mon_y).max(0) as u32;
+      eprintln!("recording: single-monitor[{}] overlay=({},{} {}x{}) adjusted=({},{})",
+        idx, x, y, width, height, adj_x, adj_y);
+      (
+        crate::recording::RecordingRegion { x: adj_x, y: adj_y, width, height },
+        crate::recording::CaptureSource::SingleMonitor(idx),
+      )
+    } else {
+      eprintln!("recording: cross-monitor overlay=({},{} {}x{}) abs=({},{} -> {},{})",
+        x, y, width, height, abs_x, abs_y, abs_r, abs_b);
+      (
+        crate::recording::RecordingRegion { x, y, width, height },
+        crate::recording::CaptureSource::FullDesktop,
+      )
+    }
   };
 
   let pipeline_config = match build_pipeline_config(&config, Some(region.clone()), capture_source) {
