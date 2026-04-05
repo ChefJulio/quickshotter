@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Unified coordinate conversion for window positioning.
 //!
 //! Three coordinate spaces exist in QuickShotter:

@@ -215,10 +215,6 @@ pub async fn prepare_delayed_capture(
     std::thread::sleep(std::time::Duration::from_millis(50));
   }).await;
 
-  // All positions are now in physical screen coordinates (converted by JS).
-  // Use the coords module to convert to Tauri logical for .position()/.inner_size().
-  use crate::coords::{self, ScreenPoint, ScreenSize};
-
   // Register a temporary global ESC shortcut to cancel the countdown.
   {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
@@ -229,15 +225,26 @@ pub async fn prepare_delayed_capture(
     }).ok();
   }
 
-  // Position countdown window — clamp to the target monitor so it
-  // doesn't spill onto an adjacent screen.
-  let countdown_phys = ScreenPoint { x: pos_x, y: pos_y };
-  let countdown_size = ScreenSize { w: 80.0, h: 80.0 };
-  let (countdown_phys, countdown_size) = coords::clamp_to_monitor(
-    countdown_phys, countdown_size, countdown_phys, &app,
-  );
-  let (cx, cy) = coords::to_tauri_pos(countdown_phys, &app);
-  let (cw, ch) = coords::to_tauri_size(countdown_size, countdown_phys, &app);
+  // On macOS, overlay sends logical coords (xcapScale=1) which Tauri's
+  // .position()/.inner_size() accept directly. On Windows, overlay sends
+  // physical coords that need conversion via the coords module.
+  #[cfg(target_os = "macos")]
+  let (cx, cy, cw, ch) = {
+    // Coords are already logical — use directly
+    (pos_x, pos_y, 80.0, 80.0)
+  };
+  #[cfg(not(target_os = "macos"))]
+  let (cx, cy, cw, ch) = {
+    use crate::coords::{self, ScreenPoint, ScreenSize};
+    let countdown_phys = ScreenPoint { x: pos_x, y: pos_y };
+    let countdown_size = ScreenSize { w: 80.0, h: 80.0 };
+    let (countdown_phys, countdown_size) = coords::clamp_to_monitor(
+      countdown_phys, countdown_size, countdown_phys, &app,
+    );
+    let (cx, cy) = coords::to_tauri_pos(countdown_phys, &app);
+    let (cw, ch) = coords::to_tauri_size(countdown_size, countdown_phys, &app);
+    (cx, cy, cw, ch)
+  };
 
   use tauri::{WebviewUrl, WebviewWindowBuilder};
   WebviewWindowBuilder::new(&app, "countdown", WebviewUrl::App("countdown.html".into()))
@@ -253,16 +260,24 @@ pub async fn prepare_delayed_capture(
     .build()
     .map_err(|e| AppError::Capture(format!("Failed to open countdown: {e}")))?;
 
-  // Selection border — clamp to the monitor containing the selection center.
+  // Selection border
   if let (Some(sx), Some(sy), Some(sw), Some(sh)) = (sel_x, sel_y, sel_w, sel_h) {
     if sw > 0.0 && sh > 0.0 {
       let pad = 3.0;
-      let border_pos = ScreenPoint { x: sx - pad, y: sy - pad };
-      let border_size = ScreenSize { w: sw + pad * 2.0, h: sh + pad * 2.0 };
-      let sel_center = ScreenPoint { x: sx + sw / 2.0, y: sy + sh / 2.0 };
-      let (bp, bs) = coords::clamp_to_monitor(border_pos, border_size, sel_center, &app);
-      let (bx, by) = coords::to_tauri_pos(bp, &app);
-      let (bw, bh) = coords::to_tauri_size(bs, bp, &app);
+
+      #[cfg(target_os = "macos")]
+      let (bx, by, bw, bh) = (sx - pad, sy - pad, sw + pad * 2.0, sh + pad * 2.0);
+      #[cfg(not(target_os = "macos"))]
+      let (bx, by, bw, bh) = {
+        use crate::coords::{self, ScreenPoint, ScreenSize};
+        let border_pos = ScreenPoint { x: sx - pad, y: sy - pad };
+        let border_size = ScreenSize { w: sw + pad * 2.0, h: sh + pad * 2.0 };
+        let sel_center = ScreenPoint { x: sx + sw / 2.0, y: sy + sh / 2.0 };
+        let (bp, bs) = coords::clamp_to_monitor(border_pos, border_size, sel_center, &app);
+        let (bx, by) = coords::to_tauri_pos(bp, &app);
+        let (bw, bh) = coords::to_tauri_size(bs, bp, &app);
+        (bx, by, bw, bh)
+      };
 
       WebviewWindowBuilder::new(&app, "delay-border", WebviewUrl::App("delay-border.html".into()))
         .title("Selection")

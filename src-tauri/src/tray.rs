@@ -96,6 +96,16 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
           }
           refresh_tray_menu(&app);
         }
+        "delay_0" | "delay_1" | "delay_2" | "delay_3" | "delay_5" | "delay_10" => {
+          let val: u32 = event.id().as_ref().strip_prefix("delay_").unwrap().parse().unwrap();
+          {
+            let s = app.state::<Mutex<AppState>>();
+            let mut state = s.lock_or_recover();
+            state.config.capture_delay = val;
+            crate::config::save_config(&app, &state.config).ok();
+          }
+          refresh_tray_menu(&app);
+        }
         "settings" => {
           crate::commands::show_settings_window(&app);
         }
@@ -185,6 +195,19 @@ pub fn build_tray_menu(
     .build()?;
   builder = builder.item(&mode_sub);
 
+  // Capture Delay submenu
+  let delay = config.capture_delay;
+  let dot = |val: u32| if delay == val { "●" } else { "○" };
+  let delay_sub = SubmenuBuilder::with_id(app, "delay_menu", "Capture Delay")
+    .item(&MenuItemBuilder::with_id("delay_0", &format!("{} None", dot(0))).build(app)?)
+    .item(&MenuItemBuilder::with_id("delay_1", &format!("{} 1s", dot(1))).build(app)?)
+    .item(&MenuItemBuilder::with_id("delay_2", &format!("{} 2s", dot(2))).build(app)?)
+    .item(&MenuItemBuilder::with_id("delay_3", &format!("{} 3s", dot(3))).build(app)?)
+    .item(&MenuItemBuilder::with_id("delay_5", &format!("{} 5s", dot(5))).build(app)?)
+    .item(&MenuItemBuilder::with_id("delay_10", &format!("{} 10s", dot(10))).build(app)?)
+    .build()?;
+  builder = builder.item(&delay_sub);
+
   // Recent captures submenu
   if !history.is_empty() {
     let mut recent = SubmenuBuilder::with_id(app, "recent_menu", "Recent");
@@ -240,6 +263,7 @@ pub fn refresh_tray_menu(app: &AppHandle) {
       hotkey_ocr: state.config.hotkey_ocr.clone(),
       hotkey_record: state.config.hotkey_record.clone(),
       capture_mode: state.config.capture_mode.clone(),
+      capture_delay: state.config.capture_delay,
       ..Default::default()
     };
     (history, image_names, config)
