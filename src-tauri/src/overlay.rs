@@ -388,11 +388,13 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
       tauri::async_runtime::spawn(async move {
         eprintln!("[timing] async capture task started: {:?} after dispatch", t_dispatch.elapsed());
 
-        // Close overlay before delay so user can interact with desktop
-        close_overlay(&app);
-
-        // Capture delay: show countdown + selection border, then wait
+        // Capture delay: close overlay first so user can see their desktop,
+        // show countdown + border, then re-capture live after delay.
+        // For freeze mode with no delay, we keep pending_screenshot intact
+        // so the capture crops from the frozen image.
         if delay > 0 && overlay_mode != "ocr" {
+          // Close overlay (clears pending_screenshot — delay always captures live)
+          close_overlay(&app);
           eprintln!("[delay] starting {}s delay", delay);
           if let Err(e) = crate::commands::run_capture_delay(&app, delay, x1, y1, x2, y2).await {
             eprintln!("[delay] cancelled or failed: {e}");
@@ -400,6 +402,7 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
           }
         }
 
+        // Run the capture (freeze mode uses pending_screenshot if still set)
         let result = if overlay_mode == "ocr" {
           let (bx, by) = {
             let s = app.state::<Mutex<AppState>>();
@@ -429,6 +432,9 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
         if let Err(e) = result {
           eprintln!("Region capture failed: {e}");
         }
+
+        // Clean up overlay state (no-op if already closed for delay path)
+        close_overlay(&app);
       });
     }
     DaemonResult::Window { left, top, right, bottom, shift, alt } => {
