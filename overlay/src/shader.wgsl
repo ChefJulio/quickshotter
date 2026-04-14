@@ -38,8 +38,10 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
   let px = frag_pos.xy;
   let uv = px / u.viewport;
 
-  // Determine if we have an active selection
-  let has_sel = u.sel_min.x >= 0.0;
+  // Determine if we have an active selection.
+  // Sentinel is (-99999,-99999) when no selection; window-local coords can be
+  // negative when the selection extends to an adjacent monitor.
+  let has_sel = u.sel_max.x > -9999.0;
 
   // Inside selection rectangle?
   let inside = has_sel

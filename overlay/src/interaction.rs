@@ -15,7 +15,7 @@ pub enum Phase {
   Cancelled,
 }
 
-/// A rectangle in window-local physical pixels.
+/// A rectangle in physical pixels (screen-space or window-local depending on context).
 #[derive(Debug, Clone, Copy)]
 pub struct Rect {
   pub x1: f32,
@@ -188,7 +188,7 @@ impl Interaction {
 
   // ── Results ──────────────────────────────────────────
 
-  /// Region selection in window-local physical pixels.
+  /// Region selection in screen-space physical pixels.
   pub fn selection(&self) -> Option<(f32, f32, f32, f32)> {
     if self.phase != Phase::Dragging && self.phase != Phase::Done {
       return None;
@@ -204,14 +204,16 @@ impl Interaction {
   }
 
   /// Final region result in screen coordinates.
-  pub fn region_result(&self, origin_x: i32, origin_y: i32) -> Option<(i32, i32, i32, i32, bool, bool)> {
+  /// Coordinates are already in screen-space (callers convert window-local to
+  /// screen-space before updating the interaction).
+  pub fn region_result(&self) -> Option<(i32, i32, i32, i32, bool, bool)> {
     if self.phase != Phase::Done { return None; }
     let (x1, y1, x2, y2) = self.selection()?;
     Some((
-      x1 as i32 + origin_x,
-      y1 as i32 + origin_y,
-      x2 as i32 + origin_x,
-      y2 as i32 + origin_y,
+      x1 as i32,
+      y1 as i32,
+      x2 as i32,
+      y2 as i32,
       self.shift,
       self.alt,
     ))

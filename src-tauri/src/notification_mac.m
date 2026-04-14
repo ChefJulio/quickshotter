@@ -16,11 +16,34 @@
 
 static QSNotificationDelegate *_delegate = nil;
 
-// Returns NSScreen.mainScreen.backingScaleFactor (2.0 on Retina, 1.0 on standard).
+// Returns the highest backingScaleFactor across all screens.
+// Using mainScreen alone is unreliable for Accessory apps (no key window),
+// which can cause it to return a non-Retina external display's scale factor.
 double qs_get_backing_scale_factor(void) {
-    NSScreen *screen = [NSScreen mainScreen];
-    if (!screen) return 2.0; // safe default for Retina Macs
-    return (double)[screen backingScaleFactor];
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    if (!screens || screens.count == 0) return 2.0; // safe default for Retina Macs
+    double maxScale = 1.0;
+    for (NSScreen *screen in screens) {
+        double s = [screen backingScaleFactor];
+        if (s > maxScale) maxScale = s;
+    }
+    return maxScale;
+}
+
+// Returns the backingScaleFactor for a specific CGDirectDisplayID.
+// Falls back to the max scale if the display can't be matched to an NSScreen.
+double qs_get_display_scale_factor(uint32_t displayID) {
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    if (!screens || screens.count == 0) return 2.0;
+    for (NSScreen *screen in screens) {
+        NSDictionary *desc = [screen deviceDescription];
+        NSNumber *screenID = desc[@"NSScreenNumber"];
+        if (screenID && [screenID unsignedIntValue] == displayID) {
+            return [screen backingScaleFactor];
+        }
+    }
+    // Fallback: return max scale
+    return qs_get_backing_scale_factor();
 }
 
 // Hide app from Cmd+Tab and Dock — tray-only app.

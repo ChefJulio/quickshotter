@@ -159,6 +159,78 @@ pub fn capture_region(x: f64, y: f64, w: f64, h: f64) -> Result<RgbaImage, AppEr
         .ok_or_else(|| AppError::Capture("Failed to create image from SCK data".to_string()))
 }
 
+/// Capture all displays and stitch into a single image covering the virtual desktop.
+/// Used for instant capture, OCR, and select_screen modes (NOT freeze mode —
+/// freeze mode uses daemon-side xcap capture with zero IPC).
+pub fn capture_all_displays() -> Result<(RgbaImage, i32, i32), AppError> {
+    ensure_cache()?;
+    let t0 = std::time::Instant::now();
+
+    let guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let displays = guard.as_ref().unwrap();
+
+    if displays.is_empty() {
+        return Err(AppError::Capture("No displays found".to_string()));
+    }
+
+    // Compute virtual desktop bounds in logical points
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+
+    for d in displays.iter() {
+        min_x = min_x.min(d.frame.x);
+        min_y = min_y.min(d.frame.y);
+        max_x = max_x.max(d.frame.x + d.frame.width);
+        max_y = max_y.max(d.frame.y + d.frame.height);
+    }
+
+    // Use backing scale for canvas (uniform scale across all displays).
+    let canvas_scale = unsafe { qs_get_backing_scale_factor() };
+    let canvas_w = ((max_x - min_x) * canvas_scale).ceil() as u32;
+    let canvas_h = ((max_y - min_y) * canvas_scale).ceil() as u32;
+
+    const MAX_PIXELS: u64 = 128_000_000;
+    if (canvas_w as u64) * (canvas_h as u64) > MAX_PIXELS {
+        return Err(AppError::Capture(format!(
+            "Virtual desktop too large to capture ({}x{})", canvas_w, canvas_h
+        )));
+    }
+
+    let mut canvas: RgbaImage = image::ImageBuffer::new(canvas_w, canvas_h);
+
+    for d in displays.iter() {
+        let dw = (d.frame.width * canvas_scale) as u32;
+        let dh = (d.frame.height * canvas_scale) as u32;
+
+        let config = SCStreamConfiguration::new()
+            .with_width(dw)
+            .with_height(dh)
+            .with_shows_cursor(false);
+
+        let img = SCScreenshotManager::capture_image(&d.filter, &config)
+            .map_err(|e| AppError::Capture(format!("Display {} capture failed: {e}", d.display_id)))?;
+
+        let rgba = img.rgba_data()
+            .map_err(|e| AppError::Capture(format!("Pixel extraction failed: {e}")))?;
+        let img_w = img.width() as u32;
+        let img_h = img.height() as u32;
+
+        if let Some(src) = RgbaImage::from_raw(img_w, img_h, rgba) {
+            let ox = ((d.frame.x - min_x) * canvas_scale).round() as u32;
+            let oy = ((d.frame.y - min_y) * canvas_scale).round() as u32;
+            image::imageops::overlay(&mut canvas, &src, ox as i64, oy as i64);
+            eprintln!("[sck] captured display {} ({}x{}) at ({},{})",
+                d.display_id, img_w, img_h, ox, oy);
+        }
+    }
+
+    drop(guard);
+    eprintln!("[sck] all displays stitched ({}x{}) in {:?}", canvas_w, canvas_h, t0.elapsed());
+    Ok((canvas, min_x as i32, min_y as i32))
+}
+
 /// Check if screen recording permission is granted.
 pub fn check_permission() -> Result<(), AppError> {
     ensure_cache()?;

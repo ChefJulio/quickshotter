@@ -4,14 +4,18 @@
 //! - FreezeRenderer: opaque window with screenshot texture, dimmed outside selection
 //! - LiveGpuRenderer: transparent window with semi-transparent dark overlay,
 //!   clear cutout inside selection. Used on macOS where layered windows aren't available.
+//!
+//! Each renderer corresponds to a single monitor's window. Selection coordinates
+//! arrive in global screen-space and are converted to window-local space using
+//! the monitor's offset.
 
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-use crate::gpu::{GpuContext, Uniforms};
+use crate::gpu::{self, GpuContext, Uniforms};
 use crate::interaction::Interaction;
 
-/// Per-capture render state for freeze mode.
+/// Per-capture render state for freeze mode (one per monitor).
 pub struct FreezeRenderer {
   pub surface: wgpu::Surface<'static>,
   pub surface_config: wgpu::SurfaceConfiguration,
@@ -20,6 +24,12 @@ pub struct FreezeRenderer {
   pub uniform_buf: wgpu::Buffer,
   pub viewport_w: f32,
   pub viewport_h: f32,
+  /// This monitor's origin in logical screen points.
+  monitor_offset_x: f32,
+  monitor_offset_y: f32,
+  /// Combined scale: window_scale * clamp_scale.
+  /// Maps logical window-local coords to surface coords.
+  render_scale: f32,
   /// Cached selection to skip GPU work when nothing changed.
   last_selection: Option<(f32, f32, f32, f32)>,
 }
@@ -31,10 +41,17 @@ impl FreezeRenderer {
     screenshot_rgba: &[u8],
     screenshot_width: u32,
     screenshot_height: u32,
+    monitor_offset_x: f32,
+    monitor_offset_y: f32,
+    window_scale: f32,
   ) -> Result<Self, String> {
     let size = window.inner_size();
-    let viewport_w = size.width as f32;
-    let viewport_h = size.height as f32;
+    let (clamped_w, clamped_h, clamp_scale) =
+      gpu::compute_clamped_size(size.width, size.height, gpu.max_texture_dim);
+    // Combined scale: logical coord → physical → surface (with clamping)
+    let render_scale = window_scale * clamp_scale;
+    let viewport_w = clamped_w as f32;
+    let viewport_h = clamped_h as f32;
 
     let surface = gpu
       .instance
@@ -57,8 +74,8 @@ impl FreezeRenderer {
     let surface_config = wgpu::SurfaceConfiguration {
       usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
       format,
-      width: size.width.max(1),
-      height: size.height.max(1),
+      width: clamped_w.max(1),
+      height: clamped_h.max(1),
       present_mode: wgpu::PresentMode::Fifo,
       desired_maximum_frame_latency: 1,
       alpha_mode,
@@ -66,12 +83,16 @@ impl FreezeRenderer {
     };
     surface.configure(&gpu.device, &surface_config);
 
+    // Clamp texture dimensions (safety net for 5K+ single monitors)
+    let (tex_w, tex_h, _) =
+      gpu::compute_clamped_size(screenshot_width, screenshot_height, gpu.max_texture_dim);
+
     // Upload screenshot texture
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
       label: Some("screenshot_tex"),
       size: wgpu::Extent3d {
-        width: screenshot_width,
-        height: screenshot_height,
+        width: tex_w,
+        height: tex_h,
         depth_or_array_layers: 1,
       },
       mip_level_count: 1,
@@ -91,12 +112,12 @@ impl FreezeRenderer {
       screenshot_rgba,
       wgpu::TexelCopyBufferLayout {
         offset: 0,
-        bytes_per_row: Some(4 * screenshot_width),
-        rows_per_image: Some(screenshot_height),
+        bytes_per_row: Some(4 * tex_w),
+        rows_per_image: Some(tex_h),
       },
       wgpu::Extent3d {
-        width: screenshot_width,
-        height: screenshot_height,
+        width: tex_w,
+        height: tex_h,
         depth_or_array_layers: 1,
       },
     );
@@ -168,12 +189,16 @@ impl FreezeRenderer {
       uniform_buf,
       viewport_w,
       viewport_h,
+      monitor_offset_x,
+      monitor_offset_y,
+      render_scale,
       // Sentinel ensures first frame always renders
       last_selection: Some((-2.0, -2.0, -2.0, -2.0)),
     })
   }
 
   /// Render one frame with current interaction state.
+  /// Selection coords are in logical screen-space; we convert to surface coords.
   /// Skips GPU work entirely when the selection hasn't changed.
   pub fn render(&mut self, gpu: &GpuContext, interaction: &Interaction) {
     let current_sel = interaction.selection();
@@ -186,8 +211,10 @@ impl FreezeRenderer {
 
     let mut uniforms = Uniforms::new(self.viewport_w, self.viewport_h, true, 0.45);
     if let Some((x1, y1, x2, y2)) = current_sel {
-      uniforms.sel_min = [x1, y1];
-      uniforms.sel_max = [x2, y2];
+      let s = self.render_scale;
+      // Convert logical screen-space to surface coords
+      uniforms.sel_min = [(x1 - self.monitor_offset_x) * s, (y1 - self.monitor_offset_y) * s];
+      uniforms.sel_max = [(x2 - self.monitor_offset_x) * s, (y2 - self.monitor_offset_y) * s];
     }
     gpu
       .queue
@@ -237,7 +264,7 @@ impl FreezeRenderer {
   }
 }
 
-/// GPU-based live overlay renderer for macOS.
+/// GPU-based live overlay renderer for macOS (one per monitor).
 /// Uses a transparent wgpu surface with the shader's `has_texture=0` path:
 /// semi-transparent dark overlay outside selection, clear inside.
 pub struct LiveGpuRenderer {
@@ -249,6 +276,11 @@ pub struct LiveGpuRenderer {
   pub viewport_w: f32,
   pub viewport_h: f32,
   pub dim_alpha: f32,
+  /// This monitor's origin in logical screen points.
+  monitor_offset_x: f32,
+  monitor_offset_y: f32,
+  /// Combined scale: window_scale * clamp_scale.
+  render_scale: f32,
   last_selection: Option<(f32, f32, f32, f32)>,
 }
 
@@ -257,10 +289,16 @@ impl LiveGpuRenderer {
     gpu: &GpuContext,
     window: Arc<winit::window::Window>,
     dim_alpha: f32,
+    monitor_offset_x: f32,
+    monitor_offset_y: f32,
+    window_scale: f32,
   ) -> Result<Self, String> {
     let size = window.inner_size();
-    let viewport_w = size.width as f32;
-    let viewport_h = size.height as f32;
+    let (clamped_w, clamped_h, clamp_scale) =
+      gpu::compute_clamped_size(size.width, size.height, gpu.max_texture_dim);
+    let render_scale = window_scale * clamp_scale;
+    let viewport_w = clamped_w as f32;
+    let viewport_h = clamped_h as f32;
 
     let surface = gpu
       .instance
@@ -291,8 +329,8 @@ impl LiveGpuRenderer {
     let surface_config = wgpu::SurfaceConfiguration {
       usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
       format,
-      width: size.width.max(1),
-      height: size.height.max(1),
+      width: clamped_w.max(1),
+      height: clamped_h.max(1),
       present_mode: wgpu::PresentMode::Fifo,
       desired_maximum_frame_latency: 1,
       alpha_mode,
@@ -369,6 +407,9 @@ impl LiveGpuRenderer {
       viewport_w,
       viewport_h,
       dim_alpha,
+      monitor_offset_x,
+      monitor_offset_y,
+      render_scale,
       // Sentinel value: Some((-2,-2,-2,-2)) ensures the first frame always renders
       // (it will never match the real selection which starts as None).
       last_selection: Some((-2.0, -2.0, -2.0, -2.0)),
@@ -385,8 +426,10 @@ impl LiveGpuRenderer {
 
     let mut uniforms = Uniforms::new(self.viewport_w, self.viewport_h, false, self.dim_alpha);
     if let Some((x1, y1, x2, y2)) = current_sel {
-      uniforms.sel_min = [x1, y1];
-      uniforms.sel_max = [x2, y2];
+      let s = self.render_scale;
+      // Convert logical screen-space to surface coords
+      uniforms.sel_min = [(x1 - self.monitor_offset_x) * s, (y1 - self.monitor_offset_y) * s];
+      uniforms.sel_max = [(x2 - self.monitor_offset_x) * s, (y2 - self.monitor_offset_y) * s];
     }
     gpu
       .queue

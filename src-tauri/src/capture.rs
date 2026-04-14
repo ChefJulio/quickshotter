@@ -84,10 +84,8 @@ pub fn get_desktop_bounds() -> Result<DesktopBounds, AppError> {
 /// On Windows, uses a single BitBlt of the full virtual desktop — much faster than
 /// per-monitor capture + stitch.
 pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
-  // Fast path: single capture_region call for the full virtual desktop.
-  // On Windows this uses BitBlt, on macOS this uses CGWindowListCreateImage.
-  // Both are much faster than per-monitor xcap capture + stitch.
-  #[cfg(any(target_os = "windows", target_os = "macos"))]
+  // Windows: single BitBlt of the full virtual desktop.
+  #[cfg(target_os = "windows")]
   {
     let bounds = get_desktop_bounds()?;
     let img = capture_region(bounds.x, bounds.y, bounds.width, bounds.height)?;
@@ -97,6 +95,21 @@ pub fn capture_all_monitors() -> Result<ScreenCapture, AppError> {
       origin_x: bounds.x,
       origin_y: bounds.y,
       image: img,
+    });
+  }
+
+  // macOS: capture each display individually via SCScreenshotManager and stitch.
+  // SCScreenshotManager requires a per-display content filter, so we can't capture
+  // the full virtual desktop in a single call.
+  #[cfg(target_os = "macos")]
+  {
+    let (image, origin_x, origin_y) = crate::sccapture_mac::capture_all_displays()?;
+    return Ok(ScreenCapture {
+      width: image.width(),
+      height: image.height(),
+      origin_x,
+      origin_y,
+      image,
     });
   }
 

@@ -15,6 +15,7 @@ pub struct GpuContext {
   pub pipeline_layout: wgpu::PipelineLayout,
   pub bind_group_layout: wgpu::BindGroupLayout,
   pub sampler: wgpu::Sampler,
+  pub max_texture_dim: u32,
 }
 
 impl GpuContext {
@@ -41,6 +42,14 @@ impl GpuContext {
       force_fallback_adapter: false,
     }))
     .map_err(|e| format!("No suitable GPU adapter found: {e}"))?;
+
+    // adapter.limits().max_texture_dimension_2d reports the limit for regular
+    // textures (e.g. 16384 on Apple Silicon). However, surface/swapchain textures
+    // have a stricter limit (8192) imposed by the Metal/Vulkan backend that wgpu
+    // doesn't expose via the API. Use the minimum of both to be safe.
+    let max_texture_dim = adapter.limits().max_texture_dimension_2d.min(8192);
+    eprintln!("[gpu] max_texture_dimension_2d = {} (adapter reports {}, surface cap = 8192)",
+      max_texture_dim, adapter.limits().max_texture_dimension_2d);
 
     let (device, queue) = pollster::block_on(adapter.request_device(
       &wgpu::DeviceDescriptor {
@@ -114,6 +123,7 @@ impl GpuContext {
       pipeline_layout,
       bind_group_layout,
       sampler,
+      max_texture_dim,
     })
   }
 
@@ -137,6 +147,20 @@ impl GpuContext {
   }
 }
 
+/// Compute clamped surface dimensions that fit within the GPU's max texture size.
+/// Returns (clamped_width, clamped_height, render_scale) where render_scale < 1.0
+/// means the surface is downscaled. Uses uniform scaling to preserve aspect ratio.
+pub fn compute_clamped_size(width: u32, height: u32, max_dim: u32) -> (u32, u32, f32) {
+  if width <= max_dim && height <= max_dim {
+    return (width, height, 1.0);
+  }
+  let scale = (max_dim as f64 / width as f64).min(max_dim as f64 / height as f64);
+  let clamped_w = (width as f64 * scale) as u32;
+  let clamped_h = (height as f64 * scale) as u32;
+  eprintln!("[gpu] clamping surface {}x{} -> {}x{} (scale={:.4})", width, height, clamped_w, clamped_h, scale);
+  (clamped_w.max(1), clamped_h.max(1), scale as f32)
+}
+
 /// Uniform buffer layout matching shader.wgsl `Uniforms` struct.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -152,8 +176,8 @@ impl Uniforms {
   pub fn new(viewport_w: f32, viewport_h: f32, has_texture: bool, dim_alpha: f32) -> Self {
     Self {
       viewport: [viewport_w, viewport_h],
-      sel_min: [-1.0, -1.0], // no selection
-      sel_max: [-1.0, -1.0],
+      sel_min: [-99999.0, -99999.0], // no selection sentinel
+      sel_max: [-99999.0, -99999.0],
       has_texture: if has_texture { 1.0 } else { 0.0 },
       dim_alpha,
     }

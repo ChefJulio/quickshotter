@@ -314,16 +314,16 @@ pub async fn run_capture_delay(
 ) -> Result<(), AppError> {
   use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-  // Daemon returns physical pixel coords. Tauri .position()/.inner_size()
-  // expect logical coords. Divide by scale factor.
+  // Daemon now sends logical screen points (macOS) or physical pixels (Windows).
+  // Tauri .position()/.inner_size() expect logical coords.
+  #[cfg(target_os = "macos")]
+  let scale = 1.0;  // already logical
+  #[cfg(not(target_os = "macos"))]
   let scale = {
     if let Ok(Some(mon)) = app.primary_monitor() {
       mon.scale_factor()
     } else {
-      #[cfg(target_os = "macos")]
-      { crate::capture::get_retina_scale() }
-      #[cfg(not(target_os = "macos"))]
-      { 1.0 }
+      1.0
     }
   };
 
@@ -785,23 +785,30 @@ pub async fn complete_region_capture_from_overlay(
   let has_pending = app.state::<Mutex<AppState>>().lock_or_recover().pending_screenshot.is_some();
 
   if has_pending {
-    // Freeze mode: crop from pre-captured image using image-space coords
-    let (bx, by) = {
+    // Freeze mode: crop from pre-captured image using image-space coords.
+    // Daemon sends logical screen points; the pre-captured image is at physical
+    // pixel resolution. Use dynamic image:bounds ratio for correct scaling.
+    let (bx, by, sx, sy) = {
       let s = app.state::<Mutex<AppState>>();
       let state = s.lock_or_recover();
-      match state.cached_bounds {
-        Some((x, y, _, _)) => (x, y),
-        None => {
-          drop(state);
-          let b = capture::get_desktop_bounds()?;
-          (b.x, b.y)
-        }
-      }
+      let (bx, by, bw, bh) = state.cached_bounds.unwrap_or_else(|| {
+        let b = capture::get_desktop_bounds().unwrap_or(
+          capture::DesktopBounds { x: 0, y: 0, width: 1, height: 1 }
+        );
+        (b.x, b.y, b.width, b.height)
+      });
+      let (img_w, img_h) = state.pending_screenshot.as_ref()
+        .map(|s| (s.width(), s.height()))
+        .unwrap_or((bw, bh));
+      (bx, by,
+       img_w as f64 / bw.max(1) as f64,
+       img_h as f64 / bh.max(1) as f64)
     };
-    let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
-    let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
-    let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
-    let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
+
+    let img_x1 = (((x1.min(x2) - bx) as f64 * sx).max(0.0)) as u32;
+    let img_y1 = (((y1.min(y2) - by) as f64 * sy).max(0.0)) as u32;
+    let img_x2 = (((x1.max(x2) - bx) as f64 * sx).max(0.0)) as u32;
+    let img_y2 = (((y1.max(y2) - by) as f64 * sy).max(0.0)) as u32;
     complete_region_capture_inner(app, img_x1, img_y1, img_x2, img_y2, shift, alt).await
   } else {
     // Live mode: use screen coords directly — capture_region uses BitBlt
@@ -830,17 +837,9 @@ async fn complete_region_capture_live(
   // No compositor wait needed — the daemon called DwmFlush() before sending
   // the result, guaranteeing the overlay window is fully removed.
 
-  // On macOS, daemon returns physical pixels but ScreenCaptureKit
-  // expects logical points. Divide by Retina scale factor.
-  #[cfg(target_os = "macos")]
-  let (screen_x, screen_y, w, h) = {
-    let scale = capture::get_retina_scale();
-    let sx = (screen_x as f64 / scale) as i32;
-    let sy = (screen_y as f64 / scale) as i32;
-    let sw = (w as f64 / scale) as u32;
-    let sh = (h as f64 / scale) as u32;
-    (sx, sy, sw, sh)
-  };
+  // On macOS, the daemon now sends logical screen points (already divided
+  // by its scale_factor). ScreenCaptureKit expects logical points, so no
+  // conversion needed here.
 
   // Capture just the selected region (ScreenCaptureKit on macOS, BitBlt on Windows)
   let image = capture::capture_region(screen_x, screen_y, w, h)?;

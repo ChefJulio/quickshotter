@@ -30,6 +30,7 @@ windows = { version = "0.62", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWindow", "NSRunningApplication"] }
+screencapturekit = { version = "1.5", features = ["macos_14_0"] }
 
 [profile.release]
 opt-level = 3

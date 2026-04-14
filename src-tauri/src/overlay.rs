@@ -53,7 +53,12 @@ fn is_zero_u32(v: &u32) -> bool { *v == 0 }
 #[serde(tag = "action", rename_all = "snake_case")]
 enum DaemonResult {
   Ready,
-  Region { x1: i32, y1: i32, x2: i32, y2: i32, shift: bool, alt: bool },
+  Region {
+    x1: i32, y1: i32, x2: i32, y2: i32, shift: bool, alt: bool,
+    #[serde(default)] crop_path: Option<String>,
+    #[serde(default)] crop_width: Option<u32>,
+    #[serde(default)] crop_height: Option<u32>,
+  },
   Window { left: i32, top: i32, right: i32, bottom: i32, shift: bool, alt: bool },
   RecordRegion { x: i32, y: i32, width: u32, height: u32 },
   SelectScreen { monitor_index: u32 },
@@ -227,9 +232,9 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
   {
     let s = app.state::<Mutex<AppState>>();
     let mut state = s.lock_or_recover();
-    if state.is_capturing || state.is_annotating || state.is_recording {
-      eprintln!("[overlay] blocked: is_capturing={} is_annotating={} is_recording={}",
-        state.is_capturing, state.is_annotating, state.is_recording);
+    if state.is_capturing || state.is_recording {
+      eprintln!("[overlay] blocked: is_capturing={} is_recording={}",
+        state.is_capturing, state.is_recording);
       return Ok(());
     }
     state.is_capturing = true;
@@ -266,47 +271,9 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     window_capture::start();
   }
 
-  // Pre-capture only for freeze mode (screenshot displayed as GPU texture).
-  // Live/instant modes use a transparent overlay — no pre-capture needed.
-  let is_recording = mode == "record_region";
-  let needs_capture = !is_recording && mode == "freeze";
-
-  let mut image_path: Option<String> = None;
-  let mut image_width: u32 = 0;
-  let mut image_height: u32 = 0;
-
-  if needs_capture {
-    eprintln!("[timing] pre-capture start: {:?}", t0.elapsed());
-    let screen = match capture::capture_all_monitors() {
-      Ok(s) => s,
-      Err(e) => {
-        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-        return Err(e);
-      }
-    };
-
-    eprintln!("[timing] screen captured ({}x{}): {:?}", screen.image.width(), screen.image.height(), t0.elapsed());
-
-    // Write raw RGBA to temp file for the overlay daemon (freeze mode only —
-    // daemon loads it as a GPU texture for the frozen screenshot background)
-    if mode == "freeze" {
-      let temp = std::env::temp_dir().join("qs_overlay_capture.raw");
-      if let Err(e) = std::fs::write(&temp, screen.image.as_raw()) {
-        app.state::<Mutex<AppState>>().lock_or_recover().is_capturing = false;
-        return Err(AppError::Capture(format!("Failed to write temp capture: {e}")));
-      }
-      image_path = Some(temp.to_string_lossy().to_string());
-      image_width = screen.image.width();
-      image_height = screen.image.height();
-      eprintln!("[timing] temp RGBA file written: {:?}", t0.elapsed());
-    }
-
-    // Store pending screenshot for cropping after selection
-    let s = app.state::<Mutex<AppState>>();
-    let mut state = s.lock_or_recover();
-    state.pending_screenshot = Some(screen.image);
-  }
-
+  // Freeze mode: the daemon captures monitors itself (no IPC for image data).
+  // Live/instant modes: transparent overlay, capture happens after selection.
+  // No pre-capture needed on the host side for any mode.
   eprintln!("[overlay] ready to send in {:?}, mode={mode}", t0.elapsed());
 
   // Native daemon overlay — GPU-accelerated on both Windows and macOS.
@@ -319,7 +286,7 @@ pub fn open_overlay_with_mode(app: &AppHandle, mode: &str) -> Result<(), AppErro
     std::thread::spawn(move || {
       eprintln!("[overlay] background thread: calling run_capture_on_daemon");
       let result = run_capture_on_daemon(
-        &daemon_mode, image_path, image_width, image_height,
+        &daemon_mode, None, 0, 0,
         bounds.x, bounds.y, bounds.width, bounds.height,
       );
 
@@ -381,17 +348,32 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
   eprintln!("[timing] dispatch_result entered");
   match result {
     DaemonResult::Ready => { /* shouldn't happen here */ }
-    DaemonResult::Region { x1, y1, x2, y2, shift, alt } => {
+    DaemonResult::Region { x1, y1, x2, y2, shift, alt, crop_path, crop_width, crop_height } => {
+      eprintln!("[overlay] region: ({},{})→({},{}) shift={} alt={}", x1, y1, x2, y2, shift, alt);
       let overlay_mode = app.state::<Mutex<AppState>>().lock_or_recover().overlay_mode.clone();
       let delay = app.state::<Mutex<AppState>>().lock_or_recover().config.capture_delay;
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
         eprintln!("[timing] async capture task started: {:?} after dispatch", t_dispatch.elapsed());
 
+        // If daemon provided a freeze-mode crop, load it as pending_screenshot
+        if let (Some(path), Some(cw), Some(ch)) = (&crop_path, crop_width, crop_height) {
+          let t_load = std::time::Instant::now();
+          if let Ok(data) = std::fs::read(path) {
+            if let Some(img) = image::RgbaImage::from_raw(cw, ch, data) {
+              eprintln!("[timing] loaded daemon crop {}x{} in {:?}", cw, ch, t_load.elapsed());
+              let s = app.state::<Mutex<AppState>>();
+              let mut state = s.lock_or_recover();
+              state.pending_screenshot = Some(img);
+              // Set bounds to match the crop so the existing crop path
+              // treats it as a 1:1 mapping (no scaling needed).
+              state.cached_bounds = Some((x1.min(x2), y1.min(y2), (x1 - x2).unsigned_abs(), (y1 - y2).unsigned_abs()));
+            }
+          }
+        }
+
         // Capture delay: close overlay first so user can see their desktop,
         // show countdown + border, then re-capture live after delay.
-        // For freeze mode with no delay, we keep pending_screenshot intact
-        // so the capture crops from the frozen image.
         if delay > 0 && overlay_mode != "ocr" {
           // Close overlay (clears pending_screenshot — delay always captures live)
           close_overlay(&app);
@@ -418,10 +400,15 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
               }
             }
           };
-          let img_x1 = ((x1.min(x2) - bx).max(0)) as u32;
-          let img_y1 = ((y1.min(y2) - by).max(0)) as u32;
-          let img_x2 = ((x1.max(x2) - bx).max(0)) as u32;
-          let img_y2 = ((y1.max(y2) - by).max(0)) as u32;
+          // Daemon sends logical screen points; image is physical pixels.
+          #[cfg(target_os = "macos")]
+          let retina = crate::capture::get_retina_scale();
+          #[cfg(not(target_os = "macos"))]
+          let retina = 1.0_f64;
+          let img_x1 = (((x1.min(x2) - bx) as f64 * retina).max(0.0)) as u32;
+          let img_y1 = (((y1.min(y2) - by) as f64 * retina).max(0.0)) as u32;
+          let img_x2 = (((x1.max(x2) - bx) as f64 * retina).max(0.0)) as u32;
+          let img_y2 = (((y1.max(y2) - by) as f64 * retina).max(0.0)) as u32;
           crate::commands::complete_ocr_capture_from_overlay(&app, img_x1, img_y1, img_x2, img_y2)
             .await.map(|_| ())
         } else {
@@ -452,38 +439,19 @@ fn dispatch_result(app: &AppHandle, result: DaemonResult) {
     DaemonResult::RecordRegion { x, y, width, height } => {
       let app = app.clone();
       tauri::async_runtime::spawn(async move {
-        // Daemon returns screen-space coordinates (physical pixels on Windows,
-        // physical pixels on macOS too since winit CursorMoved gives physical).
-        // On macOS, convert to logical points since xcap and the recording
-        // pipeline use logical coordinates.
-        #[cfg(target_os = "macos")]
-        let (rx, ry, rw, rh) = {
-          let scale = crate::capture::get_retina_scale();
-          let rx = (x as f64 / scale) as u32;
-          let ry = (y as f64 / scale) as u32;
-          let rw = (width as f64 / scale) as u32;
-          let rh = (height as f64 / scale) as u32;
-          eprintln!("[recording] daemon region (physical): {}x{} at ({}, {}), scale={scale}", width, height, x, y);
-          eprintln!("[recording] converted to logical: {}x{} at ({}, {})", rw, rh, rx, ry);
-          (rx, ry, rw, rh)
-        };
-        #[cfg(not(target_os = "macos"))]
+        // Daemon now sends logical screen points on macOS, physical on Windows.
+        // Recording pipeline uses logical coordinates.
         let (rx, ry, rw, rh) = (x.max(0) as u32, y.max(0) as u32, width, height);
+        eprintln!("[recording] daemon region: {}x{} at ({}, {})", rw, rh, rx, ry);
 
         // Close the daemon overlay BEFORE starting recording — the overlay
         // window is invisible but still captures mouse events, causing the
         // double-click-to-interact issue.
         close_overlay(&app);
 
-        // Position indicator above the recording region (logical coords for Tauri)
-        let indicator_x = Some(x as f64 / {
-          #[cfg(target_os = "macos")] { crate::capture::get_retina_scale() }
-          #[cfg(not(target_os = "macos"))] { 1.0 }
-        });
-        let indicator_y = Some(y as f64 / {
-          #[cfg(target_os = "macos")] { crate::capture::get_retina_scale() }
-          #[cfg(not(target_os = "macos"))] { 1.0 }
-        });
+        // Position indicator above the recording region (already logical on macOS)
+        let indicator_x = Some(x as f64);
+        let indicator_y = Some(y as f64);
 
         if let Err(e) = crate::commands::start_region_recording(
           app.clone(), rx, ry, rw, rh, indicator_x, indicator_y,

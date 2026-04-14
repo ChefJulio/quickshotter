@@ -71,8 +71,8 @@ pub enum OverlayResult {
   Ready,
 
   /// Region selected (freeze, live, ocr modes).
-  /// Coordinates are physical screen pixels and can be negative
-  /// (monitors left of / above the primary).
+  /// Coordinates are logical screen points (macOS) or physical pixels (Windows).
+  /// Can be negative (monitors left of / above the primary).
   Region {
     x1: i32,
     y1: i32,
@@ -80,6 +80,15 @@ pub enum OverlayResult {
     y2: i32,
     shift: bool,
     alt: bool,
+    /// Freeze mode: path to raw RGBA file containing the cropped capture.
+    /// When present, the host loads this directly instead of cropping from
+    /// a pre-captured desktop image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crop_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crop_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crop_height: Option<u32>,
   },
 
   /// Window selected (window mode).
